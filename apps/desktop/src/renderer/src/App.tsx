@@ -3,6 +3,7 @@ import { useAppStore } from './store/app'
 import SetupPage from './pages/Setup'
 import OperatorPage from './pages/Operator'
 import DisplayPage from './pages/Display'
+import DaySummaryPage from './pages/DaySummary'
 
 export default function App() {
   const { page, setPage, setConfig, setSetupComplete, setUpdateAvailable, setUpdateDownloaded } =
@@ -45,5 +46,6 @@ export default function App() {
 
   if (page === 'setup') return <SetupPage />
   if (page === 'display') return <DisplayPage />
+  if (page === 'summary') return <DaySummaryPage />
   return <OperatorPage />
 }

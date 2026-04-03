@@ -262,14 +262,8 @@ export default function OperatorPage() {
             <Monitor className="w-3.5 h-3.5" /> Display
           </button>
           <button
-            onClick={async () => {
-              if (!confirm('Reset today\'s queue? All tickets will be cleared.')) return
-              await window.api.tickets.resetDay()
-              const [tix, s] = await Promise.all([window.api.tickets.list(), window.api.stats.today()])
-              setTickets(tix as QueueTicket[])
-              setStats(s as any)
-            }}
-            title="Reset day"
+            onClick={() => setPage('summary' as any)}
+            title="End of day summary"
             className="flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 transition-colors"
           >
             <RefreshCw className="w-3.5 h-3.5" />
