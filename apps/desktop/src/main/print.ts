@@ -11,6 +11,7 @@ export function setupPrintHandlers(): void {
     organizationName: string
     issuedAt: string
     windowCount: number
+    _rawHtml?: string
   }) => {
     return new Promise<{ success: boolean; error?: string }>((resolve) => {
       const printWindow = new BrowserWindow({
@@ -20,7 +21,7 @@ export function setupPrintHandlers(): void {
         webPreferences: { javascript: true },
       })
 
-      const html = buildTicketHtml(ticket)
+      const html = ticket._rawHtml ?? buildTicketHtml(ticket)
       printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
 
       printWindow.webContents.once('did-finish-load', () => {

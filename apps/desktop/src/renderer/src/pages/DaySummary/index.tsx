@@ -55,10 +55,14 @@ export default function DaySummaryPage() {
   const serveRate = total > 0 ? Math.round((stats.served / total) * 100) : 0
 
   async function handleReset() {
-    if (!confirm('Reset today\'s queue? Waiting tickets will be cleared. This cannot be undone.')) return
+    if (!confirm('Reset today\'s queue? All tickets will be cleared. This cannot be undone.')) return
     setResetting(true)
-    await window.api.tickets.resetDay()
-    setPage('operator')
+    try {
+      await window.api.tickets.resetDay()
+      setPage('operator')
+    } finally {
+      setResetting(false)
+    }
   }
 
   async function printSummary() {

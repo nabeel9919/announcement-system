@@ -262,7 +262,7 @@ export default function OperatorPage() {
             <Monitor className="w-3.5 h-3.5" /> Display
           </button>
           <button
-            onClick={() => setPage('summary' as any)}
+            onClick={() => setPage('summary')}
             title="End of day summary"
             className="flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 transition-colors"
           >

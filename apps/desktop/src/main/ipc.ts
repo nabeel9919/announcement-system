@@ -205,16 +205,16 @@ export function setupIpcHandlers(): void {
 
   ipcMain.handle('tickets:nextSequence', (_event, categoryId: string) => {
     const db = getDb()
+    const today = new Date().toISOString().slice(0, 10)
     const result = db.prepare(
-      'SELECT MAX(sequence_number) as max FROM tickets WHERE category_id = ?'
-    ).get(categoryId) as { max: number | null }
+      `SELECT MAX(sequence_number) as max FROM tickets WHERE category_id = ? AND created_at LIKE ?`
+    ).get(categoryId, `${today}%`) as { max: number | null }
     return (result.max ?? 0) + 1
   })
 
   ipcMain.handle('tickets:resetDay', () => {
     const db = getDb()
-    // Archive today's tickets by marking them with a reset flag
-    db.prepare(`DELETE FROM tickets WHERE status IN ('served', 'skipped', 'no_show')`).run()
+    db.prepare(`DELETE FROM tickets`).run()
     db.prepare(`UPDATE windows SET current_ticket_id = NULL`).run()
     return { success: true }
   })
