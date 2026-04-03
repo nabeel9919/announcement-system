@@ -16,6 +16,7 @@ model Client {
   contactPhone     String?
   country          String         @default("TZ")
   city             String?
+  sector           String?
   notes            String?
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
@@ -27,10 +28,8 @@ model Client {
 
 model License {
   id               String    @id @default(cuid())
-  /** Normalized 20-char key without dashes */
-  key              String    @unique
-  /** Formatted key with dashes for display */
-  formattedKey     String    @unique
+  key              String    @unique  // Normalized 20-char key without dashes
+  formattedKey     String    @unique  // Formatted key with dashes for display
   clientId         String
   client           Client    @relation(fields: [clientId], references: [id])
   tier             Tier      @default(STARTER)
@@ -39,8 +38,7 @@ model License {
   features         String[]
   issuedAt         DateTime  @default(now())
   expiresAt        DateTime
-  /** Machine fingerprint — set on first activation */
-  machineId        String?
+  machineId        String?   // Machine fingerprint — set on first activation
   isRevoked        Boolean   @default(false)
   revokedAt        DateTime?
   revokedReason    String?
@@ -51,57 +49,60 @@ model License {
 }
 
 model Subscription {
-  id                  String             @id @default(cuid())
-  clientId            String
-  client              Client             @relation(fields: [clientId], references: [id])
-  planId              String
-  plan                PricingPlan        @relation(fields: [planId], references: [id])
-  status              SubscriptionStatus @default(TRIALING)
-  currentPeriodStart  DateTime
-  currentPeriodEnd    DateTime
-  trialEndsAt         DateTime?
-  cancelAtPeriodEnd   Boolean            @default(false)
-  canceledAt          DateTime?
-  stripeSubscriptionId String?           @unique
-  createdAt           DateTime           @default(now())
-  updatedAt           DateTime           @updatedAt
+  id                   String             @id @default(cuid())
+  clientId             String
+  client               Client             @relation(fields: [clientId], references: [id])
+  planId               String
+  plan                 PricingPlan        @relation(fields: [planId], references: [id])
+  status               SubscriptionStatus @default(TRIALING)
+  currentPeriodStart   DateTime
+  currentPeriodEnd     DateTime
+  trialEndsAt          DateTime?
+  cancelAtPeriodEnd    Boolean            @default(false)
+  canceledAt           DateTime?
+  stripeSubscriptionId String?            @unique
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  invoices             Invoice[]
 }
 
 model PricingPlan {
-  id                   String        @id @default(cuid())
-  name                 String
-  /** Price in full currency units (e.g. 30000 for 30,000 TZS) */
-  price                Int
-  currency             String        @default("TZS")
-  interval             BillingInterval @default(MONTHLY)
+  id                    String          @id @default(cuid())
+  name                  String
+  price                 Int             // Full currency units e.g. 30000 = 30,000 TZS
+  currency              String          @default("TZS")
+  interval              BillingInterval @default(MONTHLY)
   yearlyDiscountPercent Int?
-  features             String[]
-  maxWindows           Int
-  maxSites             Int
-  isActive             Boolean       @default(true)
-  isHighlighted        Boolean       @default(false)
-  sortOrder            Int           @default(0)
-  stripePriceId        String?
-  createdAt            DateTime      @default(now())
-  updatedAt            DateTime      @updatedAt
+  features              String[]
+  maxWindows            Int
+  maxSites              Int
+  isActive              Boolean         @default(true)
+  isHighlighted         Boolean         @default(false)
+  sortOrder             Int             @default(0)
+  stripePriceId         String?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
 
-  subscriptions        Subscription[]
+  subscriptions         Subscription[]
 }
 
 model Invoice {
-  id          String        @id @default(cuid())
-  clientId    String
-  client      Client        @relation(fields: [clientId], references: [id])
-  amount      Int           // in full currency units
-  currency    String        @default("TZS")
-  status      InvoiceStatus @default(OPEN)
-  issuedAt    DateTime      @default(now())
-  dueAt       DateTime
-  paidAt      DateTime?
-  description String
-  stripeInvoiceId String?   @unique
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  id              String         @id @default(cuid())
+  clientId        String
+  client          Client         @relation(fields: [clientId], references: [id])
+  subscriptionId  String?
+  subscription    Subscription?  @relation(fields: [subscriptionId], references: [id])
+  amount          Int            // Full currency units
+  currency        String         @default("TZS")
+  status          InvoiceStatus  @default(OPEN)
+  issuedAt        DateTime       @default(now())
+  dueAt           DateTime
+  paidAt          DateTime?
+  description     String
+  stripeInvoiceId String?        @unique
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 }
 
 enum Tier {
