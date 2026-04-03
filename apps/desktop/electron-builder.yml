@@ -58,7 +58,7 @@ mac:
 # Auto-updater — GitHub Releases
 publish:
   provider: github
-  owner: YOUR_GITHUB_USERNAME
+  owner: nabeel9919
   repo: announcement-system
   private: false
   releaseType: release

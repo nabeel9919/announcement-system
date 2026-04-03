@@ -95,12 +95,50 @@ export function setupIpcHandlers(): void {
 
   // ─── Tickets ─────────────────────────────────────────────────────────────
 
+  function mapTicket(row: any) {
+    return {
+      id: row.id,
+      displayNumber: row.display_number,
+      sequenceNumber: row.sequence_number,
+      categoryId: row.category_id,
+      status: row.status,
+      createdAt: row.created_at,
+      calledAt: row.called_at ?? undefined,
+      servedAt: row.served_at ?? undefined,
+      windowId: row.window_id ?? undefined,
+      calleeName: row.callee_name ?? undefined,
+      recallCount: row.recall_count ?? 0,
+    }
+  }
+
+  function mapCategory(row: any) {
+    return {
+      id: row.id,
+      code: row.code,
+      label: row.label,
+      windowIds: JSON.parse(row.window_ids ?? '[]'),
+      color: row.color,
+      prefix: row.prefix,
+    }
+  }
+
+  function mapWindow(row: any) {
+    return {
+      id: row.id,
+      number: row.number,
+      label: row.label,
+      operatorName: row.operator_name ?? undefined,
+      isActive: row.is_active === 1,
+      currentTicketId: row.current_ticket_id ?? undefined,
+    }
+  }
+
   ipcMain.handle('tickets:list', (_event, status?: string) => {
     const db = getDb()
-    if (status) {
-      return db.prepare('SELECT * FROM tickets WHERE status = ? ORDER BY sequence_number ASC').all(status)
-    }
-    return db.prepare('SELECT * FROM tickets ORDER BY sequence_number ASC').all()
+    const rows = status
+      ? db.prepare('SELECT * FROM tickets WHERE status = ? ORDER BY sequence_number ASC').all(status)
+      : db.prepare('SELECT * FROM tickets ORDER BY sequence_number ASC').all()
+    return (rows as any[]).map(mapTicket)
   })
 
   ipcMain.handle('tickets:create', (_event, ticket: Record<string, unknown>) => {
@@ -113,7 +151,7 @@ export function setupIpcHandlers(): void {
       display_number: ticket.displayNumber,
       sequence_number: ticket.sequenceNumber,
       category_id: ticket.categoryId,
-      created_at: new Date().toISOString(),
+      created_at: ticket.createdAt ?? new Date().toISOString(),
       callee_name: ticket.calleeName ?? null,
     })
     return ticket
@@ -185,7 +223,7 @@ export function setupIpcHandlers(): void {
 
   ipcMain.handle('categories:list', () => {
     const db = getDb()
-    return db.prepare('SELECT * FROM categories').all()
+    return (db.prepare('SELECT * FROM categories').all() as any[]).map(mapCategory)
   })
 
   ipcMain.handle('categories:upsert', (_event, category: Record<string, unknown>) => {
@@ -211,7 +249,7 @@ export function setupIpcHandlers(): void {
 
   ipcMain.handle('windows:list', () => {
     const db = getDb()
-    return db.prepare('SELECT * FROM windows ORDER BY number ASC').all()
+    return (db.prepare('SELECT * FROM windows ORDER BY number ASC').all() as any[]).map(mapWindow)
   })
 
   ipcMain.handle('windows:upsert', (_event, window: Record<string, unknown>) => {
