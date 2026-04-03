@@ -6,7 +6,7 @@ import { buildAnnouncementText, AudioEngine } from '@announcement/audio-engine'
 import { cn, generateId, padNumber, minutesSince, formatTime } from '../../lib/utils'
 import {
   Volume2, VolumeX, RotateCcw, SkipForward, Check, Monitor,
-  RefreshCw, Bell, Settings, ChevronDown, Plus, Mic, Hash, CreditCard
+  RefreshCw, Bell, ChevronDown, Plus, Mic, CreditCard
 } from 'lucide-react'
 
 export default function OperatorPage() {
@@ -57,18 +57,21 @@ export default function OperatorPage() {
     load()
   }, [])
 
-  const announce = useCallback((text: string) => {
+  const announce = useCallback((text: string, displayNumber?: string) => {
     if (!isMuted && audioRef.current) {
       audioRef.current.announce(text)
     }
     // Push to display window
+    const win = windows.find((w) => w.id === selectedWindowId)
     window.api.display.send({
       type: 'call',
       text,
+      displayNumber: displayNumber ?? '—',
+      windowLabel: win?.label ?? '',
       windowId: selectedWindowId,
       timestamp: new Date().toISOString(),
     })
-  }, [isMuted, selectedWindowId])
+  }, [isMuted, selectedWindowId, windows])
 
   // ─── Issue ticket (ticket mode) ──────────────────────────────────────────
   async function issueTicket(categoryId: string) {
@@ -116,7 +119,7 @@ export default function OperatorPage() {
       announcementPrefix: 'Attention please,',
       calleeName: next.calleeName,
     })
-    announce(text)
+    announce(text, next.displayNumber)
     refreshStats()
   }
 
@@ -132,7 +135,7 @@ export default function OperatorPage() {
       windowLabel: win.label,
       announcementPrefix: 'Recall —',
     })
-    announce(text)
+    announce(text, ticket.displayNumber)
   }
 
   // ─── Call by name ────────────────────────────────────────────────────────
@@ -141,7 +144,7 @@ export default function OperatorPage() {
     const win = windows.find((w) => w.id === selectedWindowId)
     if (!win) return
     const text = buildAnnouncementText({ displayNumber: '', windowLabel: win.label, calleeName: nameInput.trim() })
-    announce(text)
+    announce(text, nameInput.trim())
     setNameInput('')
   }
 
@@ -151,7 +154,7 @@ export default function OperatorPage() {
     const win = windows.find((w) => w.id === selectedWindowId)
     if (!win) return
     const text = buildAnnouncementText({ displayNumber: cardInput.trim(), windowLabel: win.label })
-    announce(text)
+    announce(text, cardInput.trim())
     setCardInput('')
   }
 
@@ -245,10 +248,17 @@ export default function OperatorPage() {
             <Monitor className="w-3.5 h-3.5" /> Display
           </button>
           <button
-            onClick={() => setPage('settings' as any)}
+            onClick={async () => {
+              if (!confirm('Reset today\'s queue? All tickets will be cleared.')) return
+              await window.api.tickets.resetDay()
+              const [tix, s] = await Promise.all([window.api.tickets.list(), window.api.stats.today()])
+              setTickets(tix as QueueTicket[])
+              setStats(s as any)
+            }}
+            title="Reset day"
             className="flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 transition-colors"
           >
-            <Settings className="w-3.5 h-3.5" />
+            <RefreshCw className="w-3.5 h-3.5" />
           </button>
         </div>
       </aside>
