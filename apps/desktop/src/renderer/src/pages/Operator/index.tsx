@@ -6,7 +6,7 @@ import { buildAnnouncementText, AudioEngine } from '@announcement/audio-engine'
 import { cn, generateId, padNumber, minutesSince, formatTime } from '../../lib/utils'
 import {
   Volume2, VolumeX, RotateCcw, SkipForward, Check, Monitor,
-  RefreshCw, Bell, ChevronDown, Plus, Mic, CreditCard, Printer, Tablet, Settings
+  RefreshCw, Bell, ChevronDown, Plus, Mic, CreditCard, Printer, Tablet, Settings, BarChart2
 } from 'lucide-react'
 
 export default function OperatorPage() {
@@ -189,6 +189,19 @@ export default function OperatorPage() {
     setStats(s as any)
   }
 
+  // Push live queue stats to display window on every ticket change
+  useEffect(() => {
+    const catStats = categories.map((cat) => ({
+      code: cat.code,
+      label: cat.label,
+      color: cat.color,
+      waiting: tickets.filter((t) => t.categoryId === cat.id && t.status === 'waiting').length,
+      called: tickets.filter((t) => t.categoryId === cat.id && t.status === 'called').length,
+    }))
+    const totalWaiting = catStats.reduce((s, c) => s + c.waiting, 0)
+    window.api.display.send({ type: 'queue_stats', categories: catStats, totalWaiting })
+  }, [tickets, categories])
+
   async function openDisplay() {
     await window.api.display.open(config?.displayScreenIndex ?? 1)
   }
@@ -271,6 +284,13 @@ export default function OperatorPage() {
             className="flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 transition-colors"
           >
             <Tablet className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={() => setPage('analytics')}
+            title="Analytics"
+            className="flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 transition-colors"
+          >
+            <BarChart2 className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={() => setPage('summary')}
