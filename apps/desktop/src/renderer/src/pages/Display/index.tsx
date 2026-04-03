@@ -28,6 +28,7 @@ export default function DisplayPage() {
   })
   const [time, setTime] = useState(new Date())
   const [flash, setFlash] = useState(false)
+  const [broadcast, setBroadcast] = useState<string | null>(null)
 
   // Clock
   useEffect(() => {
@@ -59,6 +60,12 @@ export default function DisplayPage() {
       if (payload?.type === 'config') {
         setState((prev) => ({ ...prev, ...payload.config }))
       }
+
+      if (payload?.type === 'broadcast') {
+        setBroadcast(payload.text as string)
+        // Auto-dismiss after 30 seconds
+        setTimeout(() => setBroadcast(null), 30_000)
+      }
     })
 
     // Load config from main
@@ -79,6 +86,21 @@ export default function DisplayPage() {
 
   return (
     <div className="flex flex-col h-screen bg-zinc-950 text-white overflow-hidden select-none">
+
+      {/* ── Emergency broadcast overlay ───────────────────────────────── */}
+      {broadcast && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-red-950/95 animate-fade-in">
+          <div className="w-20 h-20 rounded-full bg-red-600/30 border-2 border-red-500 flex items-center justify-center mb-8">
+            <span className="text-4xl">⚠</span>
+          </div>
+          <p className="text-red-300 text-lg font-semibold uppercase tracking-widest mb-6">Announcement</p>
+          <p className="text-white text-4xl font-bold text-center max-w-3xl leading-snug px-8">{broadcast}</p>
+          <button onClick={() => setBroadcast(null)}
+            className="mt-12 px-8 py-3 rounded-xl border border-red-500/40 text-red-300 text-sm hover:bg-red-900/40 transition-colors">
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* ── Header bar ───────────────────────────────────────────────────── */}
       <header className="flex items-center justify-between px-10 py-5 border-b border-zinc-800/60">

@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { InstallationConfig, CallingMode, Sector, SupportedLanguage } from '@announcement/shared'
 
-type AppPage = 'setup' | 'operator' | 'display' | 'summary' | 'kiosk'
+type AppPage = 'setup' | 'operator' | 'display' | 'summary' | 'kiosk' | 'settings'
 
 interface AppStore {
   page: AppPage

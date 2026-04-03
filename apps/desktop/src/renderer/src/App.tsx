@@ -5,6 +5,7 @@ import OperatorPage from './pages/Operator'
 import DisplayPage from './pages/Display'
 import DaySummaryPage from './pages/DaySummary'
 import KioskPage from './pages/Kiosk'
+import SettingsPage from './pages/Settings'
 
 export default function App() {
   const { page, setPage, setConfig, setSetupComplete, setUpdateAvailable, setUpdateDownloaded } =
@@ -52,5 +53,6 @@ export default function App() {
   if (page === 'display') return <DisplayPage />
   if (page === 'kiosk') return <KioskPage />
   if (page === 'summary') return <DaySummaryPage />
+  if (page === 'settings') return <SettingsPage />
   return <OperatorPage />
 }
