@@ -1,0 +1,10 @@
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+  transpilePackages: ['@announcement/shared'],
+  env: {
+    NEXT_PUBLIC_LICENSE_SERVER_URL: process.env.NEXT_PUBLIC_LICENSE_SERVER_URL ?? 'http://localhost:3001',
+  },
+}
+
+export default nextConfig

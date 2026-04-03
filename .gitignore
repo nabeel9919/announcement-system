@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+out/
+build/
+.next/
+*.tsbuildinfo
+
+# Electron
+apps/desktop/out/
+apps/desktop/dist/
+apps/desktop/release/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Turbo
+.turbo/
+
+# Database
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Keys & secrets
+*.pem
+*.key
+*.cert
+secrets/

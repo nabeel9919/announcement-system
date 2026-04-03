@@ -1,0 +1,23 @@
+{
+  "name": "announcement-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Multi-sector public announcement and queue management system",
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md}\"",
+    "clean": "turbo clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.0",
+    "prettier": "^3.3.0",
+    "typescript": "^5.5.0"
+  },
+  "packageManager": "pnpm@9.4.0",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}

@@ -1,0 +1,86 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 10% 6%;
+    --card-foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --primary: 238.7 83.5% 66.7%;
+    --primary-foreground: 144.9 80.4% 10%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --ring: 240 4.9% 83.9%;
+    --radius: 0.5rem;
+  }
+
+  * {
+    border-color: hsl(var(--border));
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* Allow text selection inside inputs */
+  input, textarea {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  body {
+    @apply bg-zinc-950 text-zinc-50 font-sans antialiased;
+    overflow: hidden;
+  }
+
+  /* Scrollbars */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-zinc-900;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-zinc-700 rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-zinc-600;
+  }
+}
+
+@layer components {
+  /* Ticket number — large, bold, font-display */
+  .ticket-number {
+    @apply font-display font-extrabold tracking-tight;
+  }
+
+  /* Window label pill */
+  .window-pill {
+    @apply inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium;
+  }
+
+  /* Card base */
+  .card-base {
+    @apply rounded-xl border border-zinc-800 bg-zinc-900/60 backdrop-blur-sm;
+  }
+
+  /* Glow effect for active calls */
+  .glow-blue {
+    box-shadow: 0 0 20px rgba(99, 102, 241, 0.3);
+  }
+
+  /* Drag region for titlebar */
+  .drag-region {
+    -webkit-app-region: drag;
+  }
+  .no-drag {
+    -webkit-app-region: no-drag;
+  }
+}

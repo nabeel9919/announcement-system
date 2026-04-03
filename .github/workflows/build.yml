@@ -1,0 +1,49 @@
+name: Build & Test
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node-version: [20]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared package
+        run: pnpm --filter @announcement/shared build
+
+      - name: Build audio engine
+        run: pnpm --filter @announcement/audio-engine build
+
+      - name: Build license server
+        run: pnpm --filter @announcement/license-server build
+
+      - name: Build desktop (renderer only)
+        run: pnpm --filter @announcement/desktop build
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+
+      - name: Build web portal
+        run: pnpm --filter @announcement/web-portal build

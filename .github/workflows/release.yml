@@ -1,0 +1,98 @@
+name: Release — Build & Publish Installers
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # triggers on v1.0.0, v1.2.3, etc.
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: |
+          pnpm --filter @announcement/shared build
+          pnpm --filter @announcement/audio-engine build
+
+      - name: Build & package Windows installer
+        run: pnpm --filter @announcement/desktop build:win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Code signing (optional — add your certificate to secrets)
+          # CSC_LINK: ${{ secrets.WINDOWS_CERT_P12_BASE64 }}
+          # CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+
+      - name: Upload Windows installer to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: apps/desktop/dist/*.exe
+          draft: false
+          prerelease: ${{ contains(github.ref, '-beta') || contains(github.ref, '-rc') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: |
+          pnpm --filter @announcement/shared build
+          pnpm --filter @announcement/audio-engine build
+
+      - name: Build & package Linux installers
+        run: pnpm --filter @announcement/desktop build:linux
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Linux installers to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            apps/desktop/dist/*.AppImage
+            apps/desktop/dist/*.deb
+          draft: false
+          prerelease: ${{ contains(github.ref, '-beta') || contains(github.ref, '-rc') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Deploy license server & web portal on release
+  deploy-cloud:
+    runs-on: ubuntu-latest
+    needs: [release-windows, release-linux]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Notify deployment
+        run: echo "Add your deployment steps here (Railway, Render, VPS, etc.)"
+        # Example: deploy to Railway, Render, or a VPS via SSH

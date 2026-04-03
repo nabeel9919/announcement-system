@@ -1,0 +1,64 @@
+appId: com.announcement.system
+productName: Announcement System
+copyright: Copyright © 2026
+
+directories:
+  buildResources: build
+  output: dist
+
+files:
+  - out/**/*
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.*'
+  - '!{.eslintignore,.eslintrc.*,.prettierignore,.prettierrc.*}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+
+asarUnpack:
+  - resources/**
+  - out/main/index.js
+
+# Windows (primary target)
+win:
+  executableName: AnnouncementSystem
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+
+nsis:
+  artifactName: AnnouncementSystem-${version}-Setup.${ext}
+  shortcutName: Announcement System
+  uninstallDisplayName: Announcement System
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+
+# Linux
+linux:
+  icon: build/icon.png
+  category: Utility
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+
+# macOS
+mac:
+  icon: build/icon.icns
+  category: public.app-category.utilities
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+
+# Auto-updater — GitHub Releases
+publish:
+  provider: github
+  owner: YOUR_GITHUB_USERNAME
+  repo: announcement-system
+  private: false
+  releaseType: release

@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@layer base {
+  :root { color-scheme: dark; }
+  body { @apply bg-zinc-950 text-zinc-50 font-sans antialiased; }
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { @apply bg-zinc-900; }
+  ::-webkit-scrollbar-thumb { @apply bg-zinc-700 rounded-full; }
+}

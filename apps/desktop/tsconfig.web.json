@@ -1,0 +1,16 @@
+{
+  "extends": "@electron-toolkit/tsconfig/tsconfig.web.json",
+  "include": [
+    "src/renderer/src/**/*"
+  ],
+  "compilerOptions": {
+    "composite": true,
+    "baseUrl": ".",
+    "paths": {
+      "@renderer/*": ["src/renderer/src/*"],
+      "@/*": ["src/renderer/src/*"],
+      "@announcement/shared": ["../../packages/shared/src/index.ts"],
+      "@announcement/audio-engine": ["../../packages/audio-engine/src/index.ts"]
+    }
+  }
+}

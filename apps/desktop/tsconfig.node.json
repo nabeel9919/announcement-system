@@ -1,0 +1,16 @@
+{
+  "extends": "@electron-toolkit/tsconfig/tsconfig.node.json",
+  "include": [
+    "electron.vite.config.*",
+    "src/main/**/*",
+    "src/preload/**/*"
+  ],
+  "compilerOptions": {
+    "composite": true,
+    "types": ["electron-vite/node"],
+    "paths": {
+      "@announcement/shared": ["../../packages/shared/src/index.ts"],
+      "@announcement/audio-engine": ["../../packages/audio-engine/src/index.ts"]
+    }
+  }
+}
