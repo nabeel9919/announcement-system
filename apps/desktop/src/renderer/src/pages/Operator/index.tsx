@@ -6,7 +6,7 @@ import { buildAnnouncementText, AudioEngine } from '@announcement/audio-engine'
 import { cn, generateId, padNumber, minutesSince, formatTime } from '../../lib/utils'
 import {
   Volume2, VolumeX, RotateCcw, SkipForward, Check, Monitor,
-  RefreshCw, Bell, ChevronDown, Plus, Mic, CreditCard, Printer
+  RefreshCw, Bell, ChevronDown, Plus, Mic, CreditCard, Printer, Tablet
 } from 'lucide-react'
 
 export default function OperatorPage() {
@@ -193,6 +193,10 @@ export default function OperatorPage() {
     await window.api.display.open(config?.displayScreenIndex ?? 1)
   }
 
+  async function openKiosk() {
+    await window.api.kiosk.open(0)
+  }
+
   const mode = config?.callingMode ?? 'hybrid'
   const waiting = waitingTickets()
   const called = calledTickets()
@@ -260,6 +264,13 @@ export default function OperatorPage() {
             className="flex-1 flex items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-800 transition-colors"
           >
             <Monitor className="w-3.5 h-3.5" /> Display
+          </button>
+          <button
+            onClick={openKiosk}
+            title="Open self-service kiosk"
+            className="flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 transition-colors"
+          >
+            <Tablet className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={() => setPage('summary')}

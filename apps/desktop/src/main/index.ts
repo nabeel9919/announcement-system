@@ -2,13 +2,14 @@ import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
-import { createOperatorWindow, createDisplayWindow } from './windows'
+import { createOperatorWindow, createDisplayWindow, createKioskWindow } from './windows'
 import { setupIpcHandlers } from './ipc'
 import { setupPrintHandlers } from './print'
 import { checkLicense } from './license'
 
 let operatorWindow: BrowserWindow | null = null
 let displayWindow: BrowserWindow | null = null
+let kioskWindow: BrowserWindow | null = null
 
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.announcement.system')
@@ -102,6 +103,22 @@ ipcMain.handle('display:close', () => {
 ipcMain.handle('display:send', (_event, payload: unknown) => {
   if (displayWindow && !displayWindow.isDestroyed()) {
     displayWindow.webContents.send('display:update', payload)
+  }
+})
+
+ipcMain.handle('kiosk:open', async (_event, screenIndex: number) => {
+  if (kioskWindow && !kioskWindow.isDestroyed()) {
+    kioskWindow.focus()
+    return
+  }
+  kioskWindow = createKioskWindow(screenIndex ?? 0)
+  kioskWindow.on('closed', () => { kioskWindow = null })
+})
+
+ipcMain.handle('kiosk:close', () => {
+  if (kioskWindow && !kioskWindow.isDestroyed()) {
+    kioskWindow.close()
+    kioskWindow = null
   }
 })
 

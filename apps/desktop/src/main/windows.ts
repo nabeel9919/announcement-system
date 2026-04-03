@@ -40,6 +40,40 @@ export function createOperatorWindow(): BrowserWindow {
   return win
 }
 
+export function createKioskWindow(screenIndex = 0): BrowserWindow {
+  const displays = screen.getAllDisplays()
+  const targetDisplay = displays[screenIndex] ?? displays[0]
+  const { x, y, width, height } = targetDisplay.bounds
+
+  const win = new BrowserWindow({
+    x,
+    y,
+    width,
+    height,
+    title: 'Announcement System — Kiosk',
+    backgroundColor: '#09090b',
+    fullscreen: true,
+    frame: false,
+    skipTaskbar: false,
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  })
+
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}#/kiosk`)
+  } else {
+    win.loadFile(join(__dirname, '../renderer/index.html'), { hash: 'kiosk' })
+  }
+
+  win.setMenu(null)
+  return win
+}
+
 export function createDisplayWindow(screenIndex = 1): BrowserWindow {
   const displays = screen.getAllDisplays()
   const targetDisplay = displays[screenIndex] ?? displays[displays.length - 1]

@@ -4,6 +4,7 @@ import SetupPage from './pages/Setup'
 import OperatorPage from './pages/Operator'
 import DisplayPage from './pages/Display'
 import DaySummaryPage from './pages/DaySummary'
+import KioskPage from './pages/Kiosk'
 
 export default function App() {
   const { page, setPage, setConfig, setSetupComplete, setUpdateAvailable, setUpdateDownloaded } =
@@ -18,6 +19,8 @@ export default function App() {
         // Check if we're the display window
         if (window.location.hash === '#/display' || window.location.hash === '#display') {
           setPage('display')
+        } else if (window.location.hash === '#/kiosk' || window.location.hash === '#kiosk') {
+          setPage('kiosk')
         } else {
           setPage('operator')
         }
@@ -32,6 +35,7 @@ export default function App() {
       if (route === '/setup') setPage('setup')
       if (route === '/operator') setPage('operator')
       if (route === '/display') setPage('display')
+      if (route === '/kiosk') setPage('kiosk')
     })
 
     // Listen for update events
@@ -46,6 +50,7 @@ export default function App() {
 
   if (page === 'setup') return <SetupPage />
   if (page === 'display') return <DisplayPage />
+  if (page === 'kiosk') return <KioskPage />
   if (page === 'summary') return <DaySummaryPage />
   return <OperatorPage />
 }

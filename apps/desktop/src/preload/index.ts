@@ -76,6 +76,12 @@ const api = {
     listPrinters: () => ipcRenderer.invoke('print:listPrinters'),
   },
 
+  // ─── Kiosk Window ──────────────────────────────────────────────────────
+  kiosk: {
+    open: (screenIndex?: number) => ipcRenderer.invoke('kiosk:open', screenIndex ?? 0),
+    close: () => ipcRenderer.invoke('kiosk:close'),
+  },
+
   // ─── Navigation ────────────────────────────────────────────────────────
   onNavigate: (cb: (route: string) => void) => {
     ipcRenderer.on('navigate', (_e, route) => cb(route))
