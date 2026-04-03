@@ -17,7 +17,8 @@
     "@announcement/shared": "workspace:*",
     "@announcement/audio-engine": "workspace:*",
     "better-sqlite3": "^11.7.0",
-    "electron-updater": "^6.3.0"
+    "electron-updater": "^6.3.0",
+    "node-machine-id": "^1.1.12"
   },
   "devDependencies": {
     "@electron-toolkit/preload": "^3.0.0",

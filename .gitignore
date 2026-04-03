@@ -7,6 +7,9 @@ dist/
 out/
 build/
 .next/
+
+# Exception: Electron desktop build resources (icons, assets)
+!apps/desktop/build/
 *.tsbuildinfo
 
 # Electron

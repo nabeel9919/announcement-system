@@ -32,6 +32,9 @@ importers:
       electron-updater:
         specifier: ^6.3.0
         version: 6.8.3
+      node-machine-id:
+        specifier: ^1.1.12
+        version: 1.1.12
     devDependencies:
       '@electron-toolkit/preload':
         specifier: ^3.0.0

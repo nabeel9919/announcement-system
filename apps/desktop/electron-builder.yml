@@ -16,12 +16,12 @@ files:
 
 asarUnpack:
   - resources/**
-  - out/main/index.js
+  - node_modules/better-sqlite3/**
 
 # Windows (primary target)
 win:
   executableName: AnnouncementSystem
-  icon: build/icon.ico
+  icon: build/icon.png
   target:
     - target: nsis
       arch: [x64]
@@ -34,8 +34,8 @@ nsis:
   createStartMenuShortcut: true
   oneClick: false
   allowToChangeInstallationDirectory: true
-  installerIcon: build/icon.ico
-  uninstallerIcon: build/icon.ico
+  installerIcon: build/icon.png
+  uninstallerIcon: build/icon.png
 
 # Linux
 linux:
@@ -49,7 +49,7 @@ linux:
 
 # macOS
 mac:
-  icon: build/icon.icns
+  icon: build/icon.png
   category: public.app-category.utilities
   target:
     - target: dmg
