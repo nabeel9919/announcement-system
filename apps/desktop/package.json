@@ -2,7 +2,6 @@
   "name": "@announcement/desktop",
   "version": "1.0.0",
   "description": "Announcement System — Desktop Client",
-  "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -11,12 +10,13 @@
     "build:linux": "npm run build && electron-builder --linux",
     "build:mac": "npm run build && electron-builder --mac",
     "preview": "electron-vite preview",
-    "clean": "rm -rf out dist"
+    "clean": "rm -rf out dist",
+    "postinstall": "electron-rebuild -f -w better-sqlite3"
   },
   "dependencies": {
     "@announcement/shared": "workspace:*",
     "@announcement/audio-engine": "workspace:*",
-    "better-sqlite3": "^9.6.0",
+    "better-sqlite3": "^11.7.0",
     "electron-updater": "^6.3.0"
   },
   "devDependencies": {
@@ -24,6 +24,7 @@
     "@electron-toolkit/tsconfig": "^1.0.0",
     "@electron-toolkit/utils": "^3.0.0",
     "@types/better-sqlite3": "^7.6.0",
+    "electron-rebuild": "^3.2.9",
     "@types/node": "^20.0.0",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
