@@ -4,6 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { createOperatorWindow, createDisplayWindow } from './windows'
 import { setupIpcHandlers } from './ipc'
+import { setupPrintHandlers } from './print'
 import { checkLicense } from './license'
 
 let operatorWindow: BrowserWindow | null = null
@@ -19,6 +20,7 @@ app.whenReady().then(async () => {
 
   // Register all IPC handlers
   setupIpcHandlers()
+  setupPrintHandlers()
 
   // Create operator window
   operatorWindow = createOperatorWindow()

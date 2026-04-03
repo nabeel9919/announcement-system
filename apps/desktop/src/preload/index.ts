@@ -70,6 +70,12 @@ const api = {
     validate: (key: string) => ipcRenderer.invoke('license:validate', key),
   },
 
+  // ─── Print ─────────────────────────────────────────────────────────────
+  print: {
+    ticket: (ticket: Record<string, unknown>) => ipcRenderer.invoke('print:ticket', ticket),
+    listPrinters: () => ipcRenderer.invoke('print:listPrinters'),
+  },
+
   // ─── Navigation ────────────────────────────────────────────────────────
   onNavigate: (cb: (route: string) => void) => {
     ipcRenderer.on('navigate', (_e, route) => cb(route))

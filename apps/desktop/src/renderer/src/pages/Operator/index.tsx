@@ -6,7 +6,7 @@ import { buildAnnouncementText, AudioEngine } from '@announcement/audio-engine'
 import { cn, generateId, padNumber, minutesSince, formatTime } from '../../lib/utils'
 import {
   Volume2, VolumeX, RotateCcw, SkipForward, Check, Monitor,
-  RefreshCw, Bell, ChevronDown, Plus, Mic, CreditCard
+  RefreshCw, Bell, ChevronDown, Plus, Mic, CreditCard, Printer
 } from 'lucide-react'
 
 export default function OperatorPage() {
@@ -73,6 +73,18 @@ export default function OperatorPage() {
     })
   }, [isMuted, selectedWindowId, windows])
 
+  // ─── Print ticket slip ───────────────────────────────────────────────────
+  async function printTicket(ticket: QueueTicket) {
+    const cat = categories.find((c) => c.id === ticket.categoryId)
+    await window.api.print.ticket({
+      displayNumber: ticket.displayNumber,
+      categoryLabel: cat?.label ?? ticket.categoryId,
+      organizationName: config?.organizationName ?? 'Announcement System',
+      issuedAt: ticket.createdAt,
+      windowCount: config?.windowCount ?? 1,
+    })
+  }
+
   // ─── Issue ticket (ticket mode) ──────────────────────────────────────────
   async function issueTicket(categoryId: string) {
     const seq = await window.api.tickets.nextSequence(categoryId)
@@ -100,6 +112,8 @@ export default function OperatorPage() {
 
     addTicket(ticket)
     refreshStats()
+    // Auto-print ticket slip if a printer is available
+    printTicket(ticket).catch(() => {/* no printer — silently skip */})
   }
 
   // ─── Call next ticket ────────────────────────────────────────────────────
@@ -475,7 +489,13 @@ export default function OperatorPage() {
               >
                 <div className="flex items-center justify-between">
                   <span className="font-display font-bold text-base text-zinc-100">{t.displayNumber}</span>
-                  <span className="text-xs text-zinc-600">{minutesSince(t.createdAt)}m</span>
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs text-zinc-600">{minutesSince(t.createdAt)}m</span>
+                    <button onClick={() => printTicket(t)} title="Reprint ticket"
+                      className="p-1 rounded hover:bg-zinc-700 text-zinc-600 hover:text-zinc-300 transition-colors">
+                      <Printer className="w-3 h-3" />
+                    </button>
+                  </div>
                 </div>
                 {cat && (
                   <div className="flex items-center gap-1.5 mt-1">
