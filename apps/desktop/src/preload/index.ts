@@ -65,6 +65,11 @@ const api = {
     },
   },
 
+  // ─── License ───────────────────────────────────────────────────────────
+  license: {
+    validate: (key: string) => ipcRenderer.invoke('license:validate', key),
+  },
+
   // ─── Navigation ────────────────────────────────────────────────────────
   onNavigate: (cb: (route: string) => void) => {
     ipcRenderer.on('navigate', (_e, route) => cb(route))

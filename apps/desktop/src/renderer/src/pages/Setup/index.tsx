@@ -33,7 +33,8 @@ export default function SetupPage() {
   const currentStepIdx = STEPS.findIndex((s) => s.id === step)
 
   async function handleValidateLicense() {
-    if (licenseKey.replace(/[\s-]/g, '').length < 20) {
+    const normalized = licenseKey.replace(/[\s-]/g, '')
+    if (normalized.length < 20) {
       setLicenseError('Please enter a valid 20-character license key')
       return
     }
@@ -44,10 +45,26 @@ export default function SetupPage() {
     setValidating(true)
     setLicenseError('')
 
-    // For now, accept any well-formed key — server validates on real startup
-    await new Promise((r) => setTimeout(r, 1200)) // simulate network
-    setValidating(false)
-    setStep('sector')
+    try {
+      const result = await window.api.license.validate(licenseKey.trim())
+
+      if (!result.valid) {
+        setLicenseError(result.error ?? 'Invalid license key. Please check and try again.')
+        setValidating(false)
+        return
+      }
+
+      // Auto-fill org name from license record
+      if (result.license?.organizationName) {
+        setOrgName(result.license.organizationName)
+      }
+
+      setValidating(false)
+      setStep('sector')
+    } catch {
+      setLicenseError('Cannot reach license server. Make sure it is running on port 3001.')
+      setValidating(false)
+    }
   }
 
   async function handleFinish() {

@@ -64,6 +64,26 @@ function initSchema(db: Database.Database): void {
 }
 
 export function setupIpcHandlers(): void {
+  // ─── License validation ───────────────────────────────────────────────────
+
+  ipcMain.handle('license:validate', async (_event, key: string) => {
+    try {
+      const { getMachineId } = await import('node-machine-id')
+      const machineId = await getMachineId()
+      const serverUrl = process.env.LICENSE_SERVER_URL ?? 'http://localhost:3001'
+
+      const res = await fetch(`${serverUrl}/api/licenses/validate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, machineId }),
+        signal: AbortSignal.timeout(10_000),
+      })
+      return await res.json()
+    } catch {
+      return { valid: false, error: 'Cannot reach license server. Make sure it is running on port 3001.' }
+    }
+  })
+
   // ─── Config ──────────────────────────────────────────────────────────────
 
   ipcMain.handle('config:read', () => readLocalConfig())
