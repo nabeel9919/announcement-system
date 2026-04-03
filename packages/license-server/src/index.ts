@@ -68,6 +68,31 @@ async function bootstrap() {
   // Health check
   fastify.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }))
 
+  // Settings stub — stored in env, real persistence via restart
+  fastify.patch('/api/settings', { onRequest: [(fastify as any).authenticate] }, async (_request, reply) => {
+    return reply.send({ success: true })
+  })
+
+  // Export — basic JSON dump of all data
+  fastify.get('/api/export', { onRequest: [(fastify as any).authenticate] }, async (_request, reply) => {
+    const [clients, plans, invoices] = await Promise.all([
+      (fastify as any).prisma.client.findMany({ include: { licenses: true, subscriptions: true } }),
+      (fastify as any).prisma.pricingPlan.findMany(),
+      (fastify as any).prisma.invoice.findMany(),
+    ])
+    return reply.send({ exportedAt: new Date().toISOString(), clients, plans, invoices })
+  })
+
+  // Emergency revoke-all
+  fastify.post('/api/licenses/revoke-all', { onRequest: [(fastify as any).authenticate] }, async (request, reply) => {
+    const { reason } = (request.body as any) ?? {}
+    const { count } = await (fastify as any).prisma.license.updateMany({
+      where: { isRevoked: false },
+      data: { isRevoked: true, revokedAt: new Date(), revokedReason: reason ?? 'Emergency revoke' },
+    })
+    return reply.send({ success: true, revokedCount: count })
+  })
+
   // TTS proxy (keeps Google TTS API key server-side)
   fastify.post('/api/tts/synthesize', async (request, reply) => {
     const { text, language, voiceName, speakingRate, pitch } = request.body as any

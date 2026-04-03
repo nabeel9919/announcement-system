@@ -3,7 +3,7 @@ import { join } from 'path'
 import fs from 'fs'
 
 const CONFIG_PATH = join(app.getPath('userData'), 'config.json')
-const LICENSE_SERVER_URL = process.env.LICENSE_SERVER_URL ?? 'https://license.announcement.app'
+const LICENSE_SERVER_URL = process.env.LICENSE_SERVER_URL ?? 'http://localhost:3001'
 const OFFLINE_GRACE_HOURS = 72
 
 interface LocalConfig {
