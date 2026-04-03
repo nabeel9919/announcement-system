@@ -64,6 +64,8 @@ export default function BillingPage() {
       mutate('/api/billing/plans/all')
       setEditing(null)
       setShowNew(false)
+    } catch (e: any) {
+      alert(e?.message ?? 'Failed to save plan.')
     } finally {
       setSaving(false)
     }

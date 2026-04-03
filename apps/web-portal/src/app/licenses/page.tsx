@@ -32,6 +32,8 @@ export default function LicensesPage() {
       })
       setNewKey(formattedKey)
       mutate('/api/billing/clients')
+    } catch (e: any) {
+      alert(e?.message ?? 'Failed to generate key.')
     } finally {
       setGenerating(false)
     }

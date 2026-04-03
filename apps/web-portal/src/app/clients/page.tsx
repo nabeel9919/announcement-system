@@ -44,6 +44,7 @@ export default function ClientsPage() {
   const [editing, setEditing] = useState<Client | null>(null)
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
   const [search, setSearch] = useState('')
 
   function openNew() {
@@ -67,6 +68,7 @@ export default function ClientsPage() {
 
   async function handleSave() {
     setSaving(true)
+    setSaveError('')
     try {
       if (editing) {
         await apiFetch(`/api/billing/clients/${editing.id}`, { method: 'PATCH', body: JSON.stringify(form) })
@@ -75,6 +77,10 @@ export default function ClientsPage() {
       }
       mutate('/api/billing/clients')
       setShowForm(false)
+    } catch (e: any) {
+      setSaveError(e?.message?.includes('409') || e?.message?.includes('500')
+        ? 'A client with this email already exists.'
+        : (e?.message ?? 'Failed to save. Check the license server is running.'))
     } finally {
       setSaving(false)
     }
@@ -174,6 +180,10 @@ export default function ClientsPage() {
                 </select>
               </div>
             </div>
+
+            {saveError && (
+              <p className="text-sm text-red-400 mb-4">{saveError}</p>
+            )}
 
             <div className="flex gap-3">
               <button onClick={() => setShowForm(false)}

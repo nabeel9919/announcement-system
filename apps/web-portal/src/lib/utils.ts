@@ -27,6 +27,17 @@ export async function apiFetch(path: string, options?: RequestInit) {
       ...options?.headers,
     },
   })
-  if (!res.ok) throw new Error(`API error ${res.status}`)
+  if (!res.ok) {
+    let message = `API error ${res.status}`
+    try {
+      const body = await res.json()
+      if (body?.error) message = body.error
+    } catch {}
+    if (res.status === 401) {
+      localStorage.removeItem('admin_token')
+      window.location.href = '/'
+    }
+    throw new Error(message)
+  }
   return res.json()
 }
