@@ -59,16 +59,16 @@ export default function OperatorPage() {
 
   const announce = useCallback((text: string, displayNumber?: string) => {
     if (!isMuted && audioRef.current) {
-      audioRef.current.announce(text)
+      try { audioRef.current.announce(text) } catch { /* TTS unavailable — continue */ }
     }
-    // Push to display window
+    // Push to display window — always runs regardless of audio
     const win = windows.find((w) => w.id === selectedWindowId)
     window.api.display.send({
       type: 'call',
       text,
       displayNumber: displayNumber ?? '—',
-      windowLabel: win?.label ?? '',
-      windowId: selectedWindowId,
+      windowLabel: win?.label ?? 'Counter',
+      windowId: selectedWindowId || 'default',
       timestamp: new Date().toISOString(),
     })
   }, [isMuted, selectedWindowId, windows])
@@ -122,14 +122,14 @@ export default function OperatorPage() {
     if (waiting.length === 0) return
     const next = waiting[0]
     const win = windows.find((w) => w.id === selectedWindowId)
-    if (!win) return
+    const windowLabel = win?.label ?? selectedWindow?.label ?? 'Counter'
 
     await window.api.tickets.call(next.id, selectedWindowId)
     updateTicket(next.id, { status: 'called', windowId: selectedWindowId, calledAt: new Date().toISOString() })
 
     const text = buildAnnouncementText({
       displayNumber: next.displayNumber,
-      windowLabel: win.label,
+      windowLabel,
       announcementPrefix: 'Attention please,',
       calleeName: next.calleeName,
     })
@@ -140,13 +140,13 @@ export default function OperatorPage() {
   // ─── Recall last called ──────────────────────────────────────────────────
   async function recallTicket(ticketId: string) {
     const ticket = tickets.find((t) => t.id === ticketId)
-    const win = windows.find((w) => w.id === selectedWindowId)
-    if (!ticket || !win) return
+    if (!ticket) return
+    const windowLabel = windows.find((w) => w.id === selectedWindowId)?.label ?? 'Counter'
 
     await window.api.tickets.recall(ticketId)
     const text = buildAnnouncementText({
       displayNumber: ticket.displayNumber,
-      windowLabel: win.label,
+      windowLabel,
       announcementPrefix: 'Recall —',
     })
     announce(text, ticket.displayNumber)
@@ -155,9 +155,8 @@ export default function OperatorPage() {
   // ─── Call by name ────────────────────────────────────────────────────────
   function callByName() {
     if (!nameInput.trim()) return
-    const win = windows.find((w) => w.id === selectedWindowId)
-    if (!win) return
-    const text = buildAnnouncementText({ displayNumber: '', windowLabel: win.label, calleeName: nameInput.trim() })
+    const windowLabel = windows.find((w) => w.id === selectedWindowId)?.label ?? 'Counter'
+    const text = buildAnnouncementText({ displayNumber: '', windowLabel, calleeName: nameInput.trim() })
     announce(text, nameInput.trim())
     setNameInput('')
   }
@@ -165,9 +164,8 @@ export default function OperatorPage() {
   // ─── Call by card ────────────────────────────────────────────────────────
   function callByCard() {
     if (!cardInput.trim()) return
-    const win = windows.find((w) => w.id === selectedWindowId)
-    if (!win) return
-    const text = buildAnnouncementText({ displayNumber: cardInput.trim(), windowLabel: win.label })
+    const windowLabel = windows.find((w) => w.id === selectedWindowId)?.label ?? 'Counter'
+    const text = buildAnnouncementText({ displayNumber: cardInput.trim(), windowLabel })
     announce(text, cardInput.trim())
     setCardInput('')
   }
