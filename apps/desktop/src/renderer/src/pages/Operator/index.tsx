@@ -4,6 +4,7 @@ import { useAppStore } from '../../store/app'
 import type { QueueTicket, ServiceWindow, QueueCategory } from '@announcement/shared'
 import { buildAnnouncementText, AudioEngine } from '@announcement/audio-engine'
 import { cn, generateId, padNumber, minutesSince, formatTime } from '../../lib/utils'
+import chimeUrl from '../../assets/chime.wav'
 import {
   Volume2, VolumeX, RotateCcw, SkipForward, Check, Monitor,
   RefreshCw, Bell, ChevronDown, Plus, Mic, CreditCard, Printer, Tablet, Settings, BarChart2
@@ -35,6 +36,7 @@ export default function OperatorPage() {
       interAnnouncementDelayMs: 1500,
       autoRecallAfterSeconds: 90,
       maxAutoRecalls: 2,
+      chimeUrl,
     })
   }, [])
 

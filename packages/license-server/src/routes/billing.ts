@@ -87,13 +87,12 @@ export const billingRoutes: FastifyPluginAsync = async (fastify) => {
 
   // ── Clients ────────────────────────────────────────────────────────────────
 
-  /** GET /api/billing/clients — admin: all clients with subscriptions + licenses */
+  /** GET /api/billing/clients — admin: all clients with subscriptions, licenses + invoices */
   fastify.get('/clients', { onRequest: [(fastify as any).authenticate] }, async (_request, reply) => {
     const clients = await (fastify as any).prisma.client.findMany({
       include: {
         subscriptions: {
           orderBy: { createdAt: 'desc' },
-          take: 1,
           include: { plan: { select: { name: true, price: true, currency: true, interval: true } } },
         },
         licenses: {
@@ -108,6 +107,9 @@ export const billingRoutes: FastifyPluginAsync = async (fastify) => {
             activatedAt: true,
           },
           orderBy: { createdAt: 'desc' },
+        },
+        invoices: {
+          orderBy: { issuedAt: 'desc' },
         },
       },
       orderBy: { createdAt: 'desc' },
@@ -143,7 +145,58 @@ export const billingRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send({ success: true })
   })
 
+  // ── Subscriptions ──────────────────────────────────────────────────────────
+
+  const createSubSchema = z.object({
+    clientId: z.string(),
+    planId: z.string(),
+    status: z.enum(['TRIALING', 'ACTIVE', 'PAST_DUE', 'CANCELED', 'UNPAID', 'PAUSED']).default('TRIALING'),
+    currentPeriodStart: z.string().datetime(),
+    currentPeriodEnd: z.string().datetime(),
+    trialEndsAt: z.string().datetime().optional(),
+  })
+
+  fastify.post('/subscriptions', { onRequest: [(fastify as any).authenticate] }, async (request, reply) => {
+    const body = createSubSchema.safeParse(request.body)
+    if (!body.success) return reply.code(400).send({ error: 'Invalid request', details: body.error.flatten() })
+
+    const sub = await (fastify as any).prisma.subscription.create({
+      data: {
+        clientId: body.data.clientId,
+        planId: body.data.planId,
+        status: body.data.status,
+        currentPeriodStart: new Date(body.data.currentPeriodStart),
+        currentPeriodEnd: new Date(body.data.currentPeriodEnd),
+        trialEndsAt: body.data.trialEndsAt ? new Date(body.data.trialEndsAt) : undefined,
+      },
+    })
+    return reply.code(201).send(sub)
+  })
+
+  fastify.patch('/subscriptions/:id', { onRequest: [(fastify as any).authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const body = createSubSchema.partial().safeParse(request.body)
+    if (!body.success) return reply.code(400).send({ error: 'Invalid request' })
+
+    const data: any = { ...body.data }
+    if (data.currentPeriodStart) data.currentPeriodStart = new Date(data.currentPeriodStart)
+    if (data.currentPeriodEnd) data.currentPeriodEnd = new Date(data.currentPeriodEnd)
+    if (data.trialEndsAt) data.trialEndsAt = new Date(data.trialEndsAt)
+
+    const sub = await (fastify as any).prisma.subscription.update({ where: { id }, data })
+    return reply.send(sub)
+  })
+
   // ── Invoices ───────────────────────────────────────────────────────────────
+
+  const createInvoiceSchema = z.object({
+    clientId: z.string(),
+    subscriptionId: z.string().optional(),
+    amount: z.number().int().positive(),
+    currency: z.string().length(3).default('TZS'),
+    description: z.string(),
+    dueAt: z.string().datetime(),
+  })
 
   /** GET /api/billing/invoices — admin: all invoices */
   fastify.get('/invoices', { onRequest: [(fastify as any).authenticate] }, async (_request, reply) => {
@@ -155,5 +208,33 @@ export const billingRoutes: FastifyPluginAsync = async (fastify) => {
       orderBy: { issuedAt: 'desc' },
     })
     return reply.send(invoices)
+  })
+
+  /** POST /api/billing/invoices — create invoice */
+  fastify.post('/invoices', { onRequest: [(fastify as any).authenticate] }, async (request, reply) => {
+    const body = createInvoiceSchema.safeParse(request.body)
+    if (!body.success) return reply.code(400).send({ error: 'Invalid request', details: body.error.flatten() })
+
+    const invoice = await (fastify as any).prisma.invoice.create({
+      data: {
+        clientId: body.data.clientId,
+        subscriptionId: body.data.subscriptionId,
+        amount: body.data.amount,
+        currency: body.data.currency,
+        description: body.data.description,
+        dueAt: new Date(body.data.dueAt),
+      },
+    })
+    return reply.code(201).send(invoice)
+  })
+
+  /** POST /api/billing/invoices/:id/pay — mark invoice as paid */
+  fastify.post('/invoices/:id/pay', { onRequest: [(fastify as any).authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const invoice = await (fastify as any).prisma.invoice.update({
+      where: { id },
+      data: { status: 'PAID', paidAt: new Date() },
+    })
+    return reply.send(invoice)
   })
 }

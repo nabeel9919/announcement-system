@@ -7,6 +7,7 @@ import 'dotenv/config'
 
 import { licensesRoutes } from './routes/licenses'
 import { billingRoutes } from './routes/billing'
+import { sendSMS, licenseExpiryMessage, invoiceDueMessage } from './services/sms'
 
 const prisma = new PrismaClient()
 
@@ -91,6 +92,60 @@ async function bootstrap() {
       data: { isRevoked: true, revokedAt: new Date(), revokedReason: reason ?? 'Emergency revoke' },
     })
     return reply.send({ success: true, revokedCount: count })
+  })
+
+  // ── SMS endpoints ─────────────────────────────────────────────────────────
+
+  /** POST /api/sms/send — admin: manual SMS to a client phone */
+  fastify.post('/api/sms/send', { onRequest: [(fastify as any).authenticate] }, async (request, reply) => {
+    const { to, message } = request.body as { to: string; message: string }
+    if (!to || !message) return reply.code(400).send({ error: 'to and message required' })
+    const result = await sendSMS(to, message)
+    return reply.send(result)
+  })
+
+  /** POST /api/sms/notify-expiry — send expiry SMS to all licenses expiring within N days */
+  fastify.post('/api/sms/notify-expiry', { onRequest: [(fastify as any).authenticate] }, async (request, reply) => {
+    const { daysAhead = 7 } = (request.body as any) ?? {}
+    const cutoff = new Date(Date.now() + daysAhead * 86400000)
+
+    const licenses = await (fastify as any).prisma.license.findMany({
+      where: { isRevoked: false, expiresAt: { lte: cutoff, gte: new Date() } },
+      include: { client: { select: { organizationName: true, contactPhone: true } } },
+    })
+
+    const results = []
+    for (const lic of licenses) {
+      if (!lic.client.contactPhone) continue
+      const daysLeft = Math.ceil((new Date(lic.expiresAt).getTime() - Date.now()) / 86400000)
+      const msg = licenseExpiryMessage(lic.client.organizationName, daysLeft)
+      const result = await sendSMS(lic.client.contactPhone, msg)
+      results.push({ license: lic.formattedKey, phone: lic.client.contactPhone, ...result })
+    }
+
+    return reply.send({ sent: results.length, results })
+  })
+
+  /** POST /api/sms/notify-invoice — SMS reminder for all open overdue invoices */
+  fastify.post('/api/sms/notify-invoice', { onRequest: [(fastify as any).authenticate] }, async (request, reply) => {
+    const now = new Date()
+    const invoices = await (fastify as any).prisma.invoice.findMany({
+      where: { status: 'OPEN', dueAt: { lt: now } },
+      include: { client: { select: { organizationName: true, contactPhone: true } } },
+    })
+
+    const results = []
+    for (const inv of invoices) {
+      if (!inv.client.contactPhone) continue
+      const msg = invoiceDueMessage(
+        inv.client.organizationName, inv.amount, inv.currency,
+        new Date(inv.dueAt).toLocaleDateString('en-TZ', { day: '2-digit', month: 'short', year: 'numeric' })
+      )
+      const result = await sendSMS(inv.client.contactPhone, msg)
+      results.push({ invoiceId: inv.id, phone: inv.client.contactPhone, ...result })
+    }
+
+    return reply.send({ sent: results.length, results })
   })
 
   // TTS proxy (keeps Google TTS API key server-side)

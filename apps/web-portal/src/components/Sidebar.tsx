@@ -4,16 +4,17 @@ import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import {
   LayoutDashboard, Users, Key, CreditCard, BarChart2,
-  Settings, MonitorPlay, LogOut,
+  Settings, MonitorPlay, LogOut, RefreshCw,
 } from 'lucide-react'
 
 const NAV = [
-  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/clients', label: 'Clients', icon: Users },
-  { href: '/licenses', label: 'Licenses', icon: Key },
-  { href: '/billing', label: 'Billing & Plans', icon: CreditCard },
-  { href: '/analytics', label: 'Analytics', icon: BarChart2 },
-  { href: '/settings', label: 'Settings', icon: Settings },
+  { href: '/dashboard',      label: 'Dashboard',      icon: LayoutDashboard },
+  { href: '/clients',        label: 'Clients',         icon: Users },
+  { href: '/licenses',       label: 'Licenses',        icon: Key },
+  { href: '/subscriptions',  label: 'Subscriptions',   icon: RefreshCw },
+  { href: '/billing',        label: 'Billing & Plans', icon: CreditCard },
+  { href: '/analytics',      label: 'Analytics',       icon: BarChart2 },
+  { href: '/settings',       label: 'Settings',        icon: Settings },
 ]
 
 export default function Sidebar() {
