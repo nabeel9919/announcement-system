@@ -1,15 +1,19 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, shell, screen } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
-import { createOperatorWindow, createDisplayWindow, createKioskWindow } from './windows'
+import { createOperatorWindow, createDisplayWindow, createKioskWindow, getScreenList } from './windows'
 import { setupIpcHandlers } from './ipc'
 import { setupPrintHandlers } from './print'
 import { checkLicense } from './license'
 
 let operatorWindow: BrowserWindow | null = null
-let displayWindow: BrowserWindow | null = null
+/** Map of screenIndex → display BrowserWindow (supports multi-screen) */
+const displayWindows = new Map<number, BrowserWindow>()
 let kioskWindow: BrowserWindow | null = null
+
+// Legacy single-window ref kept for display:register compatibility
+let displayWindow: BrowserWindow | null = null
 
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.announcement.system')
@@ -26,12 +30,15 @@ app.whenReady().then(async () => {
   // Create operator window
   operatorWindow = createOperatorWindow()
 
-  // Check license on startup
-  const licenseValid = await checkLicense()
-  if (!licenseValid) {
-    // Route to setup/activation page
-    if (is.dev) {
-      operatorWindow.webContents.send('navigate', '/setup')
+  // Check license on startup — wait for renderer to load first
+  const licenseStatus = await checkLicense()
+  if (licenseStatus !== 'ok') {
+    const route = licenseStatus === 'expired' ? '/expired' : '/setup'
+    const sendNav = () => operatorWindow!.webContents.send('navigate', route)
+    if (operatorWindow.webContents.isLoading()) {
+      operatorWindow.webContents.once('did-finish-load', sendNav)
+    } else {
+      sendNav()
     }
   }
 
@@ -86,47 +93,93 @@ function setupAutoUpdater(win: BrowserWindow) {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Find the live display window — stored ref first, fallback scan all windows */
-function getDisplayWindow(): BrowserWindow | null {
-  if (displayWindow && !displayWindow.isDestroyed()) return displayWindow
-  // Fallback: scan all open windows for the one loaded as display
-  const found = BrowserWindow.getAllWindows().find((w) => {
+/** All live display windows (values of displayWindows map + fallback scan) */
+function getAllDisplayWindows(): BrowserWindow[] {
+  // Collect from map, filtering destroyed ones
+  const fromMap = Array.from(displayWindows.values()).filter((w) => !w.isDestroyed())
+
+  // Fallback: also pick up any display windows opened outside the map (e.g. registered via display:register)
+  const scanned = BrowserWindow.getAllWindows().filter((w) => {
+    if (fromMap.includes(w)) return false
     try { return w.webContents.getURL().includes('display') } catch { return false }
   })
-  if (found) { displayWindow = found; return found }
-  return null
+
+  return [...fromMap, ...scanned]
+}
+
+/** Broadcast a payload to all open display windows */
+function broadcastToDisplays(payload: unknown) {
+  const wins = getAllDisplayWindows()
+  if (wins.length === 0) {
+    console.warn('[display:send] No display windows open — payload dropped')
+    return
+  }
+  wins.forEach((w) => w.webContents.send('display:update', payload))
 }
 
 // ── Display window IPC ────────────────────────────────────────────────────────
 
+/** Open a display window on a specific screen (or move to front if already open) */
 ipcMain.handle('display:open', async (_event, screenIndex: number) => {
-  if (displayWindow && !displayWindow.isDestroyed()) {
-    displayWindow.focus()
-    return
+  const existing = displayWindows.get(screenIndex)
+  if (existing && !existing.isDestroyed()) {
+    existing.focus()
+    return { opened: false, screenIndex }
   }
-  displayWindow = createDisplayWindow(screenIndex)
-  displayWindow.on('closed', () => { displayWindow = null })
+  const win = createDisplayWindow(screenIndex)
+  displayWindows.set(screenIndex, win)
+  displayWindow = win  // keep legacy ref for display:register
+  win.on('closed', () => {
+    displayWindows.delete(screenIndex)
+    if (displayWindow === win) displayWindow = null
+  })
+  return { opened: true, screenIndex }
 })
 
-ipcMain.handle('display:close', () => {
-  const win = getDisplayWindow()
-  if (win) { win.close(); displayWindow = null }
-})
-
-ipcMain.handle('display:send', (_event, payload: unknown) => {
-  const win = getDisplayWindow()
-  if (win) {
-    win.webContents.send('display:update', payload)
+/** Close display window(s) — omit screenIndex to close all */
+ipcMain.handle('display:close', (_event, screenIndex?: number) => {
+  if (screenIndex !== undefined) {
+    const win = displayWindows.get(screenIndex)
+    if (win && !win.isDestroyed()) { win.close() }
+    displayWindows.delete(screenIndex)
   } else {
-    console.warn('[display:send] No display window found — payload dropped')
+    // Close all display windows
+    getAllDisplayWindows().forEach((w) => { if (!w.isDestroyed()) w.close() })
+    displayWindows.clear()
+    displayWindow = null
   }
 })
 
-// Allow display window to register itself (called on display page mount)
+/** Send payload to ALL open display windows */
+ipcMain.handle('display:send', (_event, payload: unknown) => {
+  broadcastToDisplays(payload)
+})
+
+/** Return list of connected screens with status */
+ipcMain.handle('screens:list', () => {
+  const screens = getScreenList()
+  return screens.map((s) => ({
+    ...s,
+    hasDisplay: displayWindows.has(s.index) && !displayWindows.get(s.index)!.isDestroyed(),
+  }))
+})
+
+/** Allow display window to register itself — called on display page mount */
 ipcMain.handle('display:register', (_event) => {
   const senderContents = _event.sender
   const win = BrowserWindow.getAllWindows().find((w) => w.webContents === senderContents)
-  if (win) { displayWindow = win; console.log('[display] Window registered') }
+  if (win) {
+    displayWindow = win
+    // Find which screen index this window is on and register it in the map
+    const winBounds = win.getBounds()
+    const displays = screen.getAllDisplays()
+    const idx = displays.findIndex((d) =>
+      winBounds.x >= d.bounds.x && winBounds.x < d.bounds.x + d.bounds.width
+    )
+    const screenIdx = idx >= 0 ? idx : 0
+    displayWindows.set(screenIdx, win)
+    console.log(`[display] Window registered on screen ${screenIdx}`)
+  }
 })
 
 ipcMain.handle('kiosk:open', async (_event, screenIndex: number) => {

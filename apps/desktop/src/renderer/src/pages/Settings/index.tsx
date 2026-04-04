@@ -6,10 +6,10 @@ import type { QueueCategory, ServiceWindow } from '@announcement/shared'
 import { cn, generateId } from '../../lib/utils'
 import {
   ArrowLeft, Plus, Pencil, Trash2, Save, X, Loader2,
-  Building2, Monitor, Layers, Printer, Volume2, AlertTriangle
+  Building2, Monitor, Layers, Printer, Volume2, AlertTriangle, Globe
 } from 'lucide-react'
 
-type Tab = 'org' | 'categories' | 'windows' | 'printer' | 'broadcast'
+type Tab = 'org' | 'categories' | 'windows' | 'printer' | 'broadcast' | 'server'
 
 const COLORS = [
   '#4F46E5', '#0EA5E9', '#10B981', '#F59E0B',
@@ -57,11 +57,23 @@ export default function SettingsPage() {
   const [broadcastText, setBroadcastText] = useState('')
   const [broadcasting, setBroadcasting] = useState(false)
 
+  // ── Server URL
+  const [serverUrl, setServerUrl] = useState('')
+  const [serverUrlSaving, setServerUrlSaving] = useState(false)
+  const [serverUrlSaved, setServerUrlSaved] = useState(false)
+  const [serverTestResult, setServerTestResult] = useState<'ok' | 'fail' | null>(null)
+  const [serverTesting, setServerTesting] = useState(false)
+
   useEffect(() => {
     // Load fresh data
-    Promise.all([window.api.categories.list(), window.api.windows.list()]).then(([cats, wins]) => {
+    Promise.all([
+      window.api.categories.list(),
+      window.api.windows.list(),
+      window.api.config.getServerUrl(),
+    ]).then(([cats, wins, url]) => {
       setCategories(cats as QueueCategory[])
       setWindows(wins as ServiceWindow[])
+      setServerUrl(url as string)
     })
   }, [])
 
@@ -176,12 +188,35 @@ export default function SettingsPage() {
     setBroadcastText('')
   }
 
+  async function saveServerUrl() {
+    setServerUrlSaving(true)
+    await window.api.config.setServerUrl(serverUrl.trim())
+    setServerUrlSaving(false)
+    setServerUrlSaved(true)
+    setTimeout(() => setServerUrlSaved(false), 2500)
+  }
+
+  async function testServerConnection() {
+    setServerTesting(true)
+    setServerTestResult(null)
+    try {
+      const url = serverUrl.trim() || 'http://localhost:3001'
+      const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(5000) })
+      setServerTestResult(res.ok ? 'ok' : 'fail')
+    } catch {
+      setServerTestResult('fail')
+    } finally {
+      setServerTesting(false)
+    }
+  }
+
   const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
     { id: 'org', label: 'Organization', icon: Building2 },
     { id: 'categories', label: 'Categories', icon: Layers },
     { id: 'windows', label: 'Windows', icon: Monitor },
     { id: 'printer', label: 'Printer', icon: Printer },
     { id: 'broadcast', label: 'Emergency', icon: AlertTriangle },
+    { id: 'server', label: 'Server', icon: Globe },
   ]
 
   return (
@@ -521,6 +556,58 @@ export default function SettingsPage() {
             <p className="text-xs text-zinc-600 mt-4">
               The display window must be open for the message to appear on screen.
             </p>
+          </div>
+        )}
+
+        {/* ── Server Connection ─────────────────────────────────────── */}
+        {tab === 'server' && (
+          <div className="max-w-lg">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-9 h-9 rounded-xl bg-zinc-800 border border-zinc-700 flex items-center justify-center">
+                <Globe className="w-4 h-4 text-zinc-400" />
+              </div>
+              <h1 className="text-xl font-bold text-zinc-100">License Server</h1>
+            </div>
+            <p className="text-sm text-zinc-500 mb-8">
+              Point the app to your production license server (e.g. on Railway or Render).
+              The app uses this URL for license validation and TTS proxy.
+            </p>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-zinc-300 mb-1.5">
+                  License Server URL
+                </label>
+                <input
+                  value={serverUrl}
+                  onChange={(e) => setServerUrl(e.target.value)}
+                  placeholder="https://your-app.up.railway.app"
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+                <p className="text-xs text-zinc-600 mt-1.5">
+                  Leave blank or use http://localhost:3001 for local development.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3 pt-1">
+                <button onClick={saveServerUrl} disabled={serverUrlSaving}
+                  className="flex items-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-500 disabled:opacity-50 px-5 py-2.5 text-sm font-semibold text-white transition-colors">
+                  {serverUrlSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {serverUrlSaved ? 'Saved!' : 'Save URL'}
+                </button>
+                <button onClick={testServerConnection} disabled={serverTesting}
+                  className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800/50 hover:bg-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-300 transition-colors">
+                  {serverTesting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Globe className="w-4 h-4" />}
+                  Test Connection
+                </button>
+                {serverTestResult === 'ok' && (
+                  <span className="text-xs text-emerald-400 font-medium">Server reachable</span>
+                )}
+                {serverTestResult === 'fail' && (
+                  <span className="text-xs text-red-400 font-medium">Cannot reach server</span>
+                )}
+              </div>
+            </div>
           </div>
         )}
 

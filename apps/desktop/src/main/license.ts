@@ -3,7 +3,6 @@ import { join } from 'path'
 import fs from 'fs'
 
 const CONFIG_PATH = join(app.getPath('userData'), 'config.json')
-const LICENSE_SERVER_URL = process.env.LICENSE_SERVER_URL ?? 'http://localhost:3001'
 const OFFLINE_GRACE_HOURS = 72
 
 interface LocalConfig {
@@ -12,6 +11,14 @@ interface LocalConfig {
   licenseData?: unknown
   installationConfig?: unknown
   isSetupComplete?: boolean
+  /** Override the license server URL — editable from the desktop Settings page */
+  licenseServerUrl?: string
+}
+
+function getLicenseServerUrl(config?: LocalConfig): string {
+  return config?.licenseServerUrl
+    ?? process.env.LICENSE_SERVER_URL
+    ?? 'http://localhost:3001'
 }
 
 export function readLocalConfig(): LocalConfig {
@@ -32,23 +39,30 @@ export function writeLocalConfig(config: Partial<LocalConfig>): void {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2), 'utf-8')
 }
 
+export type LicenseCheckResult = 'ok' | 'needs_setup' | 'expired'
+
 /**
  * Validate license on startup.
- * Returns true if app can run (valid, grace period, or offline within 72h).
+ * Returns:
+ *   'ok'          — license valid or within offline grace period
+ *   'needs_setup' — first run, no license key / setup not complete
+ *   'expired'     — setup complete but license revoked or expired
  */
-export async function checkLicense(): Promise<boolean> {
+export async function checkLicense(): Promise<LicenseCheckResult> {
   const config = readLocalConfig()
 
   if (!config.licenseKey || !config.isSetupComplete) {
-    return false  // Needs setup
+    return 'needs_setup'
   }
+
+  const serverUrl = getLicenseServerUrl(config)
 
   // Attempt online validation
   try {
     const { getMachineId } = await import('node-machine-id')
     const machineId = await getMachineId()
 
-    const response = await fetch(`${LICENSE_SERVER_URL}/api/licenses/validate`, {
+    const response = await fetch(`${serverUrl}/api/licenses/validate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key: config.licenseKey, machineId }),
@@ -59,15 +73,16 @@ export async function checkLicense(): Promise<boolean> {
 
     if (result.valid) {
       writeLocalConfig({ lastValidatedAt: new Date().toISOString(), licenseData: result })
-      return true
+      return 'ok'
     }
 
     if (result.status === 'grace_period') {
       writeLocalConfig({ lastValidatedAt: new Date().toISOString(), licenseData: result })
-      return true
+      return 'ok'
     }
 
-    return false
+    // Online check returned invalid — license is revoked or expired
+    return 'expired'
   } catch {
     // Offline or server unreachable — check grace period
     if (config.lastValidatedAt) {
@@ -76,10 +91,14 @@ export async function checkLicense(): Promise<boolean> {
 
       if (hoursSince < OFFLINE_GRACE_HOURS) {
         console.log(`[License] Offline mode — grace period: ${Math.round(OFFLINE_GRACE_HOURS - hoursSince)}h remaining`)
-        return true
+        return 'ok'
       }
+
+      // Grace period exhausted → treat as expired
+      return 'expired'
     }
 
-    return false
+    // Never validated online and offline — treat as needs_setup
+    return 'needs_setup'
   }
 }

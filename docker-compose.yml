@@ -1,0 +1,55 @@
+version: '3.9'
+
+services:
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nabil
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: announcement_licenses
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U nabil -d announcement_licenses']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── License Server ─────────────────────────────────────────────────────────
+  license-server:
+    build:
+      context: .
+      dockerfile: packages/license-server/Dockerfile
+    restart: unless-stopped
+    ports:
+      - '3001:3001'
+    env_file:
+      - packages/license-server/.env
+    environment:
+      DATABASE_URL: postgresql://nabil:password@postgres:5432/announcement_licenses
+      NODE_ENV: production
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── Web Portal ─────────────────────────────────────────────────────────────
+  web-portal:
+    build:
+      context: .
+      dockerfile: apps/web-portal/Dockerfile
+      args:
+        NEXT_PUBLIC_LICENSE_SERVER_URL: http://localhost:3001
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    environment:
+      NEXT_PUBLIC_LICENSE_SERVER_URL: http://license-server:3001
+    depends_on:
+      - license-server
+
+volumes:
+  pgdata:

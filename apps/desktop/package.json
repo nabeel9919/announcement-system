@@ -4,12 +4,12 @@
   "description": "Announcement System — Desktop Client",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "ELECTRON_RUN_AS_NODE= electron-vite dev",
     "build": "electron-vite build",
     "build:win": "npm run build && electron-builder --win",
     "build:linux": "npm run build && electron-builder --linux",
     "build:mac": "npm run build && electron-builder --mac",
-    "preview": "electron-vite preview",
+    "preview": "ELECTRON_RUN_AS_NODE= electron-vite preview",
     "clean": "rm -rf out dist",
     "postinstall": "electron-rebuild -f -w better-sqlite3"
   },

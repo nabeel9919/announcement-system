@@ -1,11 +1,20 @@
-name: Release — Build & Publish Installers
+name: Release — Build, Publish & Deploy
 
 on:
   push:
     tags:
-      - 'v*.*.*'  # triggers on v1.0.0, v1.2.3, etc.
+      - 'v*.*.*'   # triggers on v1.0.0, v1.2.3, etc.
+
+# ── Required secrets in GitHub repo settings ─────────────────────────────────
+# GITHUB_TOKEN       — auto-provided by Actions
+# RAILWAY_TOKEN      — from Railway dashboard → Account → Tokens
+# VERCEL_TOKEN       — from Vercel dashboard → Settings → Tokens
+# VERCEL_ORG_ID      — from Vercel project settings
+# VERCEL_PROJECT_ID  — from Vercel project settings
+# LICENSE_SERVER_URL — e.g. https://announcement-server.up.railway.app
 
 jobs:
+  # ── Windows installer ───────────────────────────────────────────────────────
   release-windows:
     runs-on: windows-latest
     steps:
@@ -25,7 +34,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
-      - name: Build packages
+      - name: Build shared packages
         run: |
           pnpm --filter @announcement/shared build
           pnpm --filter @announcement/audio-engine build
@@ -34,9 +43,7 @@ jobs:
         run: pnpm --filter @announcement/desktop build:win
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Code signing (optional — add your certificate to secrets)
-          # CSC_LINK: ${{ secrets.WINDOWS_CERT_P12_BASE64 }}
-          # CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          LICENSE_SERVER_URL: ${{ secrets.LICENSE_SERVER_URL }}
 
       - name: Upload Windows installer to release
         uses: softprops/action-gh-release@v2
@@ -47,6 +54,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # ── Linux installer ─────────────────────────────────────────────────────────
   release-linux:
     runs-on: ubuntu-latest
     steps:
@@ -66,7 +74,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
-      - name: Build packages
+      - name: Build shared packages
         run: |
           pnpm --filter @announcement/shared build
           pnpm --filter @announcement/audio-engine build
@@ -75,6 +83,7 @@ jobs:
         run: pnpm --filter @announcement/desktop build:linux
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LICENSE_SERVER_URL: ${{ secrets.LICENSE_SERVER_URL }}
 
       - name: Upload Linux installers to release
         uses: softprops/action-gh-release@v2
@@ -87,12 +96,42 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Deploy license server & web portal on release
-  deploy-cloud:
+  # ── Deploy license server to Railway ───────────────────────────────────────
+  deploy-railway:
     runs-on: ubuntu-latest
-    needs: [release-windows, release-linux]
     steps:
       - uses: actions/checkout@v4
-      - name: Notify deployment
-        run: echo "Add your deployment steps here (Railway, Render, VPS, etc.)"
-        # Example: deploy to Railway, Render, or a VPS via SSH
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy license server to Railway
+        run: railway up --service license-server --detach
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+  # ── Deploy web portal to Vercel ─────────────────────────────────────────────
+  deploy-vercel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm + Vercel CLI
+        run: npm install -g pnpm@9.15.9 vercel
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build shared package
+        run: pnpm --filter @announcement/shared build
+
+      - name: Deploy web portal to Vercel (production)
+        working-directory: apps/web-portal
+        run: |
+          vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+          vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+          vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          NEXT_PUBLIC_LICENSE_SERVER_URL: ${{ secrets.LICENSE_SERVER_URL }}

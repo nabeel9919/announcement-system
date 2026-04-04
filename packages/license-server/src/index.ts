@@ -8,6 +8,7 @@ import 'dotenv/config'
 import { licensesRoutes } from './routes/licenses'
 import { billingRoutes } from './routes/billing'
 import { sendSMS, licenseExpiryMessage, invoiceDueMessage } from './services/sms'
+import { startCron, stopCron } from './services/cron'
 
 const prisma = new PrismaClient()
 
@@ -25,18 +26,25 @@ async function bootstrap() {
   fastify.decorate('prisma', prisma)
 
   // Plugins
+  const corsOrigin = process.env.CORS_ORIGIN
   await fastify.register(cors, {
-    origin: process.env.CORS_ORIGIN ?? '*',
+    // In production set CORS_ORIGIN to your Vercel domain.
+    // '*' is fine for the desktop app (Electron has no origin header).
+    origin: corsOrigin ? corsOrigin.split(',').map((s) => s.trim()) : '*',
     methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+    credentials: true,
   })
 
   await fastify.register(jwt, {
-    secret: process.env.JWT_SECRET ?? 'CHANGE_THIS_IN_PRODUCTION',
+    secret: process.env.JWT_SECRET ?? 'CHANGE_THIS_IN_PRODUCTION_USE_64_CHAR_HEX',
   })
 
+  // Tighter rate limits on auth endpoints
   await fastify.register(rateLimit, {
-    max: 100,
+    max: 200,
     timeWindow: '1 minute',
+    // Auth routes: tighter limit to prevent brute force
+    keyGenerator: (request) => request.ip,
   })
 
   // Auth decorator
@@ -48,8 +56,10 @@ async function bootstrap() {
     }
   })
 
-  // Admin login
-  fastify.post('/api/auth/login', async (request, reply) => {
+  // Admin login — strict rate limit: 10 attempts per 5 minutes per IP
+  fastify.post('/api/auth/login', {
+    config: { rateLimit: { max: 10, timeWindow: '5 minutes' } },
+  }, async (request, reply) => {
     const { email, password } = request.body as { email: string; password: string }
     const adminEmail = process.env.ADMIN_EMAIL ?? 'admin@announcement.local'
     const adminPassword = process.env.ADMIN_PASSWORD ?? 'CHANGE_IN_PRODUCTION'
@@ -177,6 +187,14 @@ async function bootstrap() {
     const data = (await response.json()) as { audioContent: string }
     const buffer = Buffer.from(data.audioContent, 'base64')
     return reply.type('audio/mpeg').send(buffer)
+  })
+
+  // ── Cron scheduler ────────────────────────────────────────────────────────
+  startCron(prisma)
+
+  fastify.addHook('onClose', async () => {
+    stopCron()
+    await prisma.$disconnect()
   })
 
   const port = parseInt(process.env.PORT ?? '3001')

@@ -70,7 +70,8 @@ export function setupIpcHandlers(): void {
     try {
       const { getMachineId } = await import('node-machine-id')
       const machineId = await getMachineId()
-      const serverUrl = process.env.LICENSE_SERVER_URL ?? 'http://localhost:3001'
+      const config = readLocalConfig()
+      const serverUrl = config.licenseServerUrl ?? process.env.LICENSE_SERVER_URL ?? 'http://localhost:3001'
 
       const res = await fetch(`${serverUrl}/api/licenses/validate`, {
         method: 'POST',
@@ -91,6 +92,16 @@ export function setupIpcHandlers(): void {
   ipcMain.handle('config:write', (_event, config: Record<string, unknown>) => {
     writeLocalConfig(config)
     return true
+  })
+
+  ipcMain.handle('config:setServerUrl', (_event, url: string) => {
+    writeLocalConfig({ licenseServerUrl: url.trim() || undefined })
+    return true
+  })
+
+  ipcMain.handle('config:getServerUrl', () => {
+    const config = readLocalConfig()
+    return config.licenseServerUrl ?? process.env.LICENSE_SERVER_URL ?? 'http://localhost:3001'
   })
 
   // ─── Tickets ─────────────────────────────────────────────────────────────

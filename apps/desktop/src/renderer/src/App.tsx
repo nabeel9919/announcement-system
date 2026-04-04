@@ -7,6 +7,7 @@ import DaySummaryPage from './pages/DaySummary'
 import KioskPage from './pages/Kiosk'
 import SettingsPage from './pages/Settings'
 import AnalyticsPage from './pages/Analytics'
+import LicenseExpiredPage from './pages/LicenseExpired'
 
 export default function App() {
   const { page, setPage, setConfig, setSetupComplete, setUpdateAvailable, setUpdateDownloaded } =
@@ -38,6 +39,7 @@ export default function App() {
       if (route === '/operator') setPage('operator')
       if (route === '/display') setPage('display')
       if (route === '/kiosk') setPage('kiosk')
+      if (route === '/expired') setPage('expired')
     })
 
     // Listen for update events
@@ -51,6 +53,7 @@ export default function App() {
   }, [])
 
   if (page === 'setup') return <SetupPage />
+  if (page === 'expired') return <LicenseExpiredPage />
   if (page === 'display') return <DisplayPage />
   if (page === 'kiosk') return <KioskPage />
   if (page === 'summary') return <DaySummaryPage />

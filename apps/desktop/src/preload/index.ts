@@ -9,6 +9,8 @@ const api = {
   config: {
     read: () => ipcRenderer.invoke('config:read'),
     write: (config: Record<string, unknown>) => ipcRenderer.invoke('config:write', config),
+    setServerUrl: (url: string) => ipcRenderer.invoke('config:setServerUrl', url),
+    getServerUrl: () => ipcRenderer.invoke('config:getServerUrl'),
   },
 
   // ─── Tickets ───────────────────────────────────────────────────────────
@@ -42,13 +44,23 @@ const api = {
 
   // ─── Display Window ────────────────────────────────────────────────────
   display: {
+    /** Open display on a specific screen index (0 = primary, 1 = second, etc.) */
     open: (screenIndex: number) => ipcRenderer.invoke('display:open', screenIndex),
-    close: () => ipcRenderer.invoke('display:close'),
+    /** Close display on a specific screen, or all displays if no index given */
+    close: (screenIndex?: number) => ipcRenderer.invoke('display:close', screenIndex),
+    /** Broadcast payload to ALL open display windows */
     send: (payload: unknown) => ipcRenderer.invoke('display:send', payload),
+    /** Called by display page on mount to register itself */
     register: () => ipcRenderer.invoke('display:register'),
     onUpdate: (cb: (payload: unknown) => void) => {
       ipcRenderer.on('display:update', (_e, payload) => cb(payload))
     },
+  },
+
+  // ─── Screens ───────────────────────────────────────────────────────────
+  screens: {
+    /** List all connected displays with index, label, resolution, and display-open status */
+    list: () => ipcRenderer.invoke('screens:list'),
   },
 
   // ─── Updater ───────────────────────────────────────────────────────────

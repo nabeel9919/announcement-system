@@ -3,15 +3,16 @@ import { useQueueStore } from '../../store/queue'
 import { useAppStore } from '../../store/app'
 import type { QueueTicket, ServiceWindow, QueueCategory } from '@announcement/shared'
 import { buildAnnouncementText, AudioEngine } from '@announcement/audio-engine'
-import { cn, generateId, padNumber, minutesSince, formatTime } from '../../lib/utils'
+import { cn, generateId, padNumber, minutesSince } from '../../lib/utils'
 import chimeUrl from '../../assets/chime.wav'
 import {
   Volume2, VolumeX, RotateCcw, SkipForward, Check, Monitor,
-  RefreshCw, Bell, ChevronDown, Plus, Mic, CreditCard, Printer, Tablet, Settings, BarChart2
+  RefreshCw, Bell, ChevronDown, Plus, Mic, CreditCard, Printer, Tablet, Settings, BarChart2,
+  Download, ArrowUpCircle
 } from 'lucide-react'
 
 export default function OperatorPage() {
-  const { config, setPage } = useAppStore()
+  const { config, setPage, updateAvailable, updateDownloaded } = useAppStore()
   const {
     tickets, windows, categories,
     setTickets, setWindows, setCategories, setStats, stats,
@@ -24,6 +25,25 @@ export default function OperatorPage() {
   const [cardInput, setCardInput] = useState('')
   const [isMuted, setIsMuted] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+
+  // Multi-screen state
+  const [screens, setScreens] = useState<{ index: number; label: string; width: number; height: number; hasDisplay: boolean }[]>([])
+
+  // Load screen list and refresh when displays change
+  async function refreshScreens() {
+    const list = await window.api.screens.list()
+    setScreens(list as any[])
+  }
+
+  async function toggleDisplay(screenIndex: number, hasDisplay: boolean) {
+    if (hasDisplay) {
+      await window.api.display.close(screenIndex)
+    } else {
+      await window.api.display.open(screenIndex)
+    }
+    // Small delay then refresh to get updated hasDisplay status
+    setTimeout(refreshScreens, 400)
+  }
 
   // Init audio engine
   useEffect(() => {
@@ -43,16 +63,18 @@ export default function OperatorPage() {
   // Load data from DB
   useEffect(() => {
     async function load() {
-      const [cats, wins, tix, s] = await Promise.all([
+      const [cats, wins, tix, s, scr] = await Promise.all([
         window.api.categories.list(),
         window.api.windows.list(),
         window.api.tickets.list(),
         window.api.stats.today(),
+        window.api.screens.list(),
       ])
       setCategories(cats as QueueCategory[])
       setWindows(wins as ServiceWindow[])
       setTickets(tix as QueueTicket[])
       setStats(s as any)
+      setScreens(scr as any[])
       if (wins.length > 0) setSelectedWindowId((wins[0] as ServiceWindow).id)
       setIsLoading(false)
     }
@@ -124,7 +146,7 @@ export default function OperatorPage() {
     if (waiting.length === 0) return
     const next = waiting[0]
     const win = windows.find((w) => w.id === selectedWindowId)
-    const windowLabel = win?.label ?? selectedWindow?.label ?? 'Counter'
+    const windowLabel = win?.label ?? 'Counter'
 
     await window.api.tickets.call(next.id, selectedWindowId)
     updateTicket(next.id, { status: 'called', windowId: selectedWindowId, calledAt: new Date().toISOString() })
@@ -202,10 +224,6 @@ export default function OperatorPage() {
     window.api.display.send({ type: 'queue_stats', categories: catStats, totalWaiting })
   }, [tickets, categories])
 
-  async function openDisplay() {
-    await window.api.display.open(config?.displayScreenIndex ?? 1)
-  }
-
   async function openKiosk() {
     await window.api.kiosk.open(0)
   }
@@ -213,7 +231,6 @@ export default function OperatorPage() {
   const mode = config?.callingMode ?? 'hybrid'
   const waiting = waitingTickets()
   const called = calledTickets()
-  const selectedWindow = windows.find((w) => w.id === selectedWindowId)
 
   if (isLoading) {
     return (
@@ -224,7 +241,39 @@ export default function OperatorPage() {
   }
 
   return (
-    <div className="flex h-screen bg-zinc-950 text-zinc-50 overflow-hidden">
+    <div className="flex flex-col h-screen bg-zinc-950 text-zinc-50 overflow-hidden">
+
+      {/* ── Auto-update banner ──────────────────────────────────────────── */}
+      {updateDownloaded && (
+        <div className="flex items-center justify-between px-5 py-2 bg-emerald-600/20 border-b border-emerald-500/30">
+          <div className="flex items-center gap-2 text-emerald-300 text-xs font-medium">
+            <ArrowUpCircle className="w-3.5 h-3.5" />
+            Update downloaded — restart to apply
+          </div>
+          <button
+            onClick={() => window.api.updater.install()}
+            className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 underline"
+          >
+            Restart Now
+          </button>
+        </div>
+      )}
+      {updateAvailable && !updateDownloaded && (
+        <div className="flex items-center justify-between px-5 py-2 bg-primary-600/20 border-b border-primary-500/30">
+          <div className="flex items-center gap-2 text-primary-300 text-xs font-medium">
+            <Download className="w-3.5 h-3.5" />
+            A new version is available
+          </div>
+          <button
+            onClick={() => window.api.updater.download()}
+            className="text-xs font-semibold text-primary-400 hover:text-primary-300 underline"
+          >
+            Download Update
+          </button>
+        </div>
+      )}
+
+      <div className="flex flex-1 overflow-hidden">
 
       {/* ── Left: Queue status ──────────────────────────────────────────── */}
       <aside className="w-72 border-r border-zinc-800 bg-zinc-900/50 flex flex-col">
@@ -271,41 +320,69 @@ export default function OperatorPage() {
         </div>
 
         {/* Bottom actions */}
-        <div className="p-4 border-t border-zinc-800 flex gap-2">
-          <button
-            onClick={openDisplay}
-            className="flex-1 flex items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-800 transition-colors"
-          >
-            <Monitor className="w-3.5 h-3.5" /> Display
-          </button>
-          <button
-            onClick={openKiosk}
-            title="Open self-service kiosk"
-            className="flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 transition-colors"
-          >
-            <Tablet className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => setPage('analytics')}
-            title="Analytics"
-            className="flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 transition-colors"
-          >
-            <BarChart2 className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => setPage('summary')}
-            title="End of day summary"
-            className="flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 transition-colors"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => setPage('settings')}
-            title="Settings"
-            className="flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-800 transition-colors"
-          >
-            <Settings className="w-3.5 h-3.5" />
-          </button>
+        <div className="p-4 border-t border-zinc-800 space-y-2">
+          {/* Screen rows — one toggle per connected display */}
+          {screens.length > 0 && (
+            <div className="space-y-1.5 mb-1">
+              <p className="text-xs font-medium text-zinc-600 uppercase tracking-wider px-1">Displays</p>
+              {screens.map((s) => (
+                <button
+                  key={s.index}
+                  onClick={() => toggleDisplay(s.index, s.hasDisplay)}
+                  title={`${s.width}×${s.height}`}
+                  className={cn(
+                    'w-full flex items-center justify-between rounded-lg border px-3 py-2 text-xs font-medium transition-colors',
+                    s.hasDisplay
+                      ? 'border-primary-500/40 bg-primary-600/15 text-primary-300'
+                      : 'border-zinc-700 bg-zinc-800/50 text-zinc-400 hover:bg-zinc-800'
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <Monitor className="w-3.5 h-3.5" />
+                    {s.label}
+                  </div>
+                  <span className={cn(
+                    'text-xs px-1.5 py-0.5 rounded-full',
+                    s.hasDisplay ? 'bg-primary-600/40 text-primary-200' : 'text-zinc-600'
+                  )}>
+                    {s.hasDisplay ? 'On' : 'Off'}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Icon bar */}
+          <div className="flex gap-1.5">
+            <button
+              onClick={openKiosk}
+              title="Open self-service kiosk"
+              className="flex-1 flex items-center justify-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800/50 px-2 py-2 text-xs text-zinc-300 hover:bg-zinc-800 transition-colors"
+            >
+              <Tablet className="w-3.5 h-3.5" /> Kiosk
+            </button>
+            <button
+              onClick={() => setPage('analytics')}
+              title="Analytics"
+              className="flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-800/50 px-2.5 py-2 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+            >
+              <BarChart2 className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => setPage('summary')}
+              title="End of day"
+              className="flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-800/50 px-2.5 py-2 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => setPage('settings')}
+              title="Settings"
+              className="flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-800/50 px-2.5 py-2 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+            >
+              <Settings className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -543,6 +620,7 @@ export default function OperatorPage() {
           )}
         </div>
       </aside>
+    </div>
     </div>
   )
 }
