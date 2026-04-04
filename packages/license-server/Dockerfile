@@ -40,7 +40,7 @@ COPY packages/license-server/src/db/schema.prisma ./packages/license-server/src/
 COPY packages/license-server/src/db/migrations ./packages/license-server/src/db/migrations
 
 # Generate Prisma client in the runner stage (avoids pnpm virtual store path issues)
-RUN cd packages/license-server && npx prisma generate --schema=src/db/schema.prisma
+RUN cd packages/license-server && npx prisma@5 generate --schema=src/db/schema.prisma
 
 # Entrypoint script
 COPY packages/license-server/docker-entrypoint.sh /docker-entrypoint.sh
