@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import Sidebar from '@/components/Sidebar'
 import { apiFetch } from '@/lib/utils'
-import { Save, Eye, EyeOff, Loader2, Shield, Bell, Globe, Database, Key } from 'lucide-react'
+import { Save, Eye, EyeOff, Loader2, Shield, Bell, Globe, Database, Key, MessageSquare, Send } from 'lucide-react'
 
 function Section({ title, icon: Icon, children }: { title: string; icon: React.ElementType; children: React.ReactNode }) {
   return (
@@ -44,6 +44,12 @@ export default function SettingsPage() {
       : 'http://localhost:3001'
   )
   const [googleTtsKey, setGoogleTtsKey] = useState('')
+  const [smsPhone, setSmsPhone] = useState('')
+  const [smsMessage, setSmsMessage] = useState('')
+  const [smsSending, setSmsSending] = useState(false)
+  const [smsResult, setSmsResult] = useState<string | null>(null)
+  const [bulkSending, setBulkSending] = useState<string | null>(null)
+  const [bulkResult, setBulkResult] = useState<string | null>(null)
   const [gracePeriod, setGracePeriod] = useState('7')
   const [offlineGrace, setOfflineGrace] = useState('72')
   const [trialDays, setTrialDays] = useState('14')
@@ -190,6 +196,93 @@ export default function SettingsPage() {
             </div>
           </Field>
           <div className="pt-4"><SaveButton section="license" /></div>
+        </Section>
+
+        {/* SMS Notifications */}
+        <Section title="SMS Notifications (Africa's Talking)" icon={MessageSquare}>
+          {/* Manual SMS */}
+          <Field label="Send Test SMS" hint="Send a one-off SMS to any number">
+            <div className="space-y-2">
+              <input value={smsPhone} onChange={(e) => setSmsPhone(e.target.value)}
+                placeholder="+255712345678 or 0712345678"
+                className={inputCls} />
+              <textarea value={smsMessage} onChange={(e) => setSmsMessage(e.target.value)}
+                placeholder="Your message here..."
+                rows={3}
+                className={inputCls + ' resize-none'} />
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={async () => {
+                    if (!smsPhone || !smsMessage) return
+                    setSmsSending(true); setSmsResult(null)
+                    try {
+                      const r = await apiFetch('/api/sms/send', {
+                        method: 'POST',
+                        body: JSON.stringify({ to: smsPhone, message: smsMessage }),
+                      })
+                      setSmsResult(r.success ? '✓ SMS sent successfully' : `✗ ${r.error}`)
+                    } catch (e: any) {
+                      setSmsResult(`✗ ${e.message}`)
+                    } finally {
+                      setSmsSending(false)
+                    }
+                  }}
+                  disabled={smsSending || !smsPhone || !smsMessage}
+                  className="flex items-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-500 disabled:opacity-40 px-4 py-2 text-sm font-semibold text-white transition-colors"
+                >
+                  {smsSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  Send SMS
+                </button>
+                {smsResult && (
+                  <p className={`text-xs ${smsResult.startsWith('✓') ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {smsResult}
+                  </p>
+                )}
+              </div>
+            </div>
+          </Field>
+
+          {/* Bulk notifications */}
+          <Field label="Bulk Notifications" hint="Send reminders to all affected clients at once">
+            <div className="space-y-2">
+              {[
+                { key: 'expiry', label: 'Notify Expiring Licenses (next 7 days)', desc: 'Sends to all clients with licenses expiring within 7 days' },
+                { key: 'invoice', label: 'Notify Overdue Invoices', desc: 'Sends to all clients with unpaid past-due invoices' },
+              ].map(({ key, label, desc }) => (
+                <div key={key} className="flex items-center justify-between rounded-lg border border-zinc-800 px-4 py-3">
+                  <div>
+                    <p className="text-sm text-zinc-200">{label}</p>
+                    <p className="text-xs text-zinc-600 mt-0.5">{desc}</p>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      if (!confirm(`Send bulk SMS to all ${key === 'expiry' ? 'expiring license' : 'overdue invoice'} clients?`)) return
+                      setBulkSending(key); setBulkResult(null)
+                      try {
+                        const endpoint = key === 'expiry' ? '/api/sms/notify-expiry' : '/api/sms/notify-invoice'
+                        const r = await apiFetch(endpoint, { method: 'POST', body: JSON.stringify({}) })
+                        setBulkResult(`✓ ${r.sent} SMS sent`)
+                      } catch (e: any) {
+                        setBulkResult(`✗ ${e.message}`)
+                      } finally {
+                        setBulkSending(null)
+                      }
+                    }}
+                    disabled={bulkSending === key}
+                    className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800/50 hover:bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors flex-shrink-0 ml-4"
+                  >
+                    {bulkSending === key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                    Send
+                  </button>
+                </div>
+              ))}
+              {bulkResult && (
+                <p className={`text-xs ${bulkResult.startsWith('✓') ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {bulkResult}
+                </p>
+              )}
+            </div>
+          </Field>
         </Section>
 
         {/* Danger zone */}
