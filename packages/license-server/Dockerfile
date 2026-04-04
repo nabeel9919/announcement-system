@@ -2,7 +2,7 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 
-RUN npm install -g pnpm@9.15.9
+RUN apk add --no-cache openssl && npm install -g pnpm@9.15.9
 
 # Copy workspace manifests (layer cache — only reinstall when these change)
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
@@ -17,14 +17,13 @@ RUN pnpm --filter @announcement/shared build
 
 # Build license server
 COPY packages/license-server ./packages/license-server
-RUN cd packages/license-server && npx prisma generate --schema=src/db/schema.prisma
 RUN pnpm --filter @announcement/license-server build
 
 # ── Stage 2: Production image ──────────────────────────────────────────────────
 FROM node:20-alpine AS runner
 WORKDIR /app
 
-RUN npm install -g pnpm@9.15.9
+RUN apk add --no-cache openssl && npm install -g pnpm@9.15.9
 
 # Copy workspace manifests and install production deps only
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
@@ -32,22 +31,16 @@ COPY packages/shared/package.json ./packages/shared/
 COPY packages/license-server/package.json ./packages/license-server/
 RUN pnpm install --no-frozen-lockfile --prod
 
-# Install prisma CLI for `migrate deploy`
-RUN npm install -g prisma
-
 # Copy built artifacts
 COPY --from=builder /app/packages/shared/dist ./packages/shared/dist
 COPY --from=builder /app/packages/license-server/dist ./packages/license-server/dist
 
-# Copy Prisma client (generated — needed at runtime)
-COPY --from=builder /app/packages/license-server/node_modules/.prisma \
-     ./packages/license-server/node_modules/.prisma
-COPY --from=builder /app/packages/license-server/node_modules/@prisma \
-     ./packages/license-server/node_modules/@prisma
-
-# Schema + migrations (needed for `migrate deploy`)
+# Schema + migrations (needed for migrate deploy + prisma generate)
 COPY packages/license-server/src/db/schema.prisma ./packages/license-server/src/db/schema.prisma
 COPY packages/license-server/src/db/migrations ./packages/license-server/src/db/migrations
+
+# Generate Prisma client in the runner stage (avoids pnpm virtual store path issues)
+RUN cd packages/license-server && npx prisma generate --schema=src/db/schema.prisma
 
 # Entrypoint script
 COPY packages/license-server/docker-entrypoint.sh /docker-entrypoint.sh
