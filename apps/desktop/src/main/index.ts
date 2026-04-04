@@ -84,26 +84,49 @@ function setupAutoUpdater(win: BrowserWindow) {
   ipcMain.handle('updater:install', () => autoUpdater.quitAndInstall())
 }
 
-// Expose display window management to renderer
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Find the live display window — stored ref first, fallback scan all windows */
+function getDisplayWindow(): BrowserWindow | null {
+  if (displayWindow && !displayWindow.isDestroyed()) return displayWindow
+  // Fallback: scan all open windows for the one loaded as display
+  const found = BrowserWindow.getAllWindows().find((w) => {
+    try { return w.webContents.getURL().includes('display') } catch { return false }
+  })
+  if (found) { displayWindow = found; return found }
+  return null
+}
+
+// ── Display window IPC ────────────────────────────────────────────────────────
+
 ipcMain.handle('display:open', async (_event, screenIndex: number) => {
   if (displayWindow && !displayWindow.isDestroyed()) {
     displayWindow.focus()
     return
   }
   displayWindow = createDisplayWindow(screenIndex)
+  displayWindow.on('closed', () => { displayWindow = null })
 })
 
 ipcMain.handle('display:close', () => {
-  if (displayWindow && !displayWindow.isDestroyed()) {
-    displayWindow.close()
-    displayWindow = null
-  }
+  const win = getDisplayWindow()
+  if (win) { win.close(); displayWindow = null }
 })
 
 ipcMain.handle('display:send', (_event, payload: unknown) => {
-  if (displayWindow && !displayWindow.isDestroyed()) {
-    displayWindow.webContents.send('display:update', payload)
+  const win = getDisplayWindow()
+  if (win) {
+    win.webContents.send('display:update', payload)
+  } else {
+    console.warn('[display:send] No display window found — payload dropped')
   }
+})
+
+// Allow display window to register itself (called on display page mount)
+ipcMain.handle('display:register', (_event) => {
+  const senderContents = _event.sender
+  const win = BrowserWindow.getAllWindows().find((w) => w.webContents === senderContents)
+  if (win) { displayWindow = win; console.log('[display] Window registered') }
 })
 
 ipcMain.handle('kiosk:open', async (_event, screenIndex: number) => {

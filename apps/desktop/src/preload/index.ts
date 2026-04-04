@@ -45,6 +45,7 @@ const api = {
     open: (screenIndex: number) => ipcRenderer.invoke('display:open', screenIndex),
     close: () => ipcRenderer.invoke('display:close'),
     send: (payload: unknown) => ipcRenderer.invoke('display:send', payload),
+    register: () => ipcRenderer.invoke('display:register'),
     onUpdate: (cb: (payload: unknown) => void) => {
       ipcRenderer.on('display:update', (_e, payload) => cb(payload))
     },

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { cn, formatTime, formatDate } from '../../lib/utils'
 
 interface DisplayCall {
@@ -19,7 +19,7 @@ interface CategoryStat {
 interface DisplayState {
   currentCalls: DisplayCall[]
   organizationName: string
-  tickerText?: string
+  tickerText: string
   categories: CategoryStat[]
   totalWaiting: number
 }
@@ -35,21 +35,40 @@ export default function DisplayPage() {
   const [time, setTime] = useState(new Date())
   const [flash, setFlash] = useState(false)
   const [broadcast, setBroadcast] = useState<string | null>(null)
+  const broadcastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Clock
+  // ── Clock ───────────────────────────────────────────────────────────────
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000)
     return () => clearInterval(t)
   }, [])
 
+  // ── Self-register + load config ─────────────────────────────────────────
+  useEffect(() => {
+    // Tell main process "I am the display window" — fixes lost reference on hot-reload
+    window.api.display.register().catch(() => {})
+
+    window.api.config.read().then((config: any) => {
+      if (config?.installationConfig) {
+        setState((prev) => ({
+          ...prev,
+          organizationName: config.installationConfig.organizationName ?? prev.organizationName,
+        }))
+      }
+    })
+  }, [])
+
+  // ── IPC push updates from operator ──────────────────────────────────────
   useEffect(() => {
     window.api.display.onUpdate((payload: any) => {
-      if (payload?.type === 'call') {
+      if (!payload) return
+
+      if (payload.type === 'call') {
         const call: DisplayCall = {
           displayNumber: payload.displayNumber ?? '—',
-          windowLabel: payload.windowLabel ?? 'Window',
-          windowId: payload.windowId,
-          calledAt: payload.timestamp,
+          windowLabel: payload.windowLabel ?? 'Counter',
+          windowId: payload.windowId ?? 'default',
+          calledAt: payload.timestamp ?? new Date().toISOString(),
         }
         setState((prev) => {
           const others = prev.currentCalls.filter((c) => c.windowId !== call.windowId)
@@ -59,34 +78,53 @@ export default function DisplayPage() {
         setTimeout(() => setFlash(false), 1200)
       }
 
-      if (payload?.type === 'queue_stats') {
+      if (payload.type === 'queue_stats') {
         setState((prev) => ({
           ...prev,
-          categories: payload.categories ?? [],
-          totalWaiting: payload.totalWaiting ?? 0,
+          categories: payload.categories ?? prev.categories,
+          totalWaiting: payload.totalWaiting ?? prev.totalWaiting,
         }))
       }
 
-      if (payload?.type === 'config') {
+      if (payload.type === 'broadcast') {
+        if (broadcastTimerRef.current) clearTimeout(broadcastTimerRef.current)
+        setBroadcast(payload.text as string)
+        broadcastTimerRef.current = setTimeout(() => setBroadcast(null), 30_000)
+      }
+
+      if (payload.type === 'config') {
         setState((prev) => ({ ...prev, ...payload.config }))
       }
-
-      if (payload?.type === 'broadcast') {
-        setBroadcast(payload.text as string)
-        setTimeout(() => setBroadcast(null), 30_000)
-      }
     })
+  }, [])
 
-    async function loadConfig() {
-      const config = await window.api.config.read()
-      if (config?.installationConfig) {
-        setState((prev) => ({
-          ...prev,
-          organizationName: config.installationConfig.organizationName,
+  // ── DB polling fallback — keeps queue board current even if push fails ──
+  useEffect(() => {
+    async function poll() {
+      try {
+        const [tickets, cats] = await Promise.all([
+          window.api.tickets.list(),
+          window.api.categories.list(),
+        ])
+        const tix = tickets as any[]
+        const categories = cats as any[]
+
+        const catStats: CategoryStat[] = categories.map((cat: any) => ({
+          code: cat.code,
+          label: cat.label,
+          color: cat.color,
+          waiting: tix.filter((t) => t.categoryId === cat.id && t.status === 'waiting').length,
+          called: tix.filter((t) => t.categoryId === cat.id && t.status === 'called').length,
         }))
-      }
+        const totalWaiting = catStats.reduce((s, c) => s + c.waiting, 0)
+
+        setState((prev) => ({ ...prev, categories: catStats, totalWaiting }))
+      } catch { /* ignore poll errors */ }
     }
-    loadConfig()
+
+    poll() // immediate on mount
+    const interval = setInterval(poll, 5_000) // every 5 seconds
+    return () => clearInterval(interval)
   }, [])
 
   const mainCall = state.currentCalls[0]
@@ -103,8 +141,10 @@ export default function DisplayPage() {
           </div>
           <p className="text-red-300 text-lg font-semibold uppercase tracking-widest mb-6">Announcement</p>
           <p className="text-white text-4xl font-bold text-center max-w-3xl leading-snug px-8">{broadcast}</p>
-          <button onClick={() => setBroadcast(null)}
-            className="mt-12 px-8 py-3 rounded-xl border border-red-500/40 text-red-300 text-sm hover:bg-red-900/40 transition-colors">
+          <button
+            onClick={() => setBroadcast(null)}
+            className="mt-12 px-8 py-3 rounded-xl border border-red-500/40 text-red-300 text-sm hover:bg-red-900/40 transition-colors"
+          >
             Dismiss
           </button>
         </div>
@@ -124,10 +164,10 @@ export default function DisplayPage() {
         <p className="text-4xl font-bold tabular-nums text-zinc-100">{formatTime(time)}</p>
       </header>
 
-      {/* ── Body: two-column ───────────────────────────────────────── */}
+      {/* ── Body ───────────────────────────────────────────────────── */}
       <div className="flex-1 flex overflow-hidden">
 
-        {/* Left: Now Serving (65%) */}
+        {/* Left: Now Serving */}
         <main className="flex-1 flex flex-col items-center justify-center px-8 py-6 gap-6">
           <p className="text-xs font-semibold text-zinc-500 uppercase tracking-[0.3em]">Now Serving</p>
 
@@ -139,8 +179,10 @@ export default function DisplayPage() {
                   ? 'border-primary-400 bg-primary-600/20 shadow-[0_0_60px_rgba(99,102,241,0.4)]'
                   : 'border-zinc-700 bg-zinc-900/60'
               )}>
-                <p className="font-display font-extrabold tracking-tight text-white leading-none"
-                  style={{ fontSize: 'clamp(4rem, 12vw, 10rem)' }}>
+                <p
+                  className="font-display font-extrabold tracking-tight text-white leading-none"
+                  style={{ fontSize: 'clamp(4rem, 12vw, 10rem)' }}
+                >
                   {mainCall.displayNumber}
                 </p>
                 <p className="text-xl font-semibold text-primary-400 mt-3">{mainCall.windowLabel}</p>
@@ -150,8 +192,10 @@ export default function DisplayPage() {
                 <div className="flex gap-3 w-full max-w-xl">
                   {otherCalls.map((call, i) => (
                     <div key={i} className="flex-1 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4 text-center">
-                      <p className="font-display font-extrabold text-zinc-100"
-                        style={{ fontSize: 'clamp(1.8rem, 4vw, 3.5rem)' }}>
+                      <p
+                        className="font-display font-extrabold text-zinc-100"
+                        style={{ fontSize: 'clamp(1.8rem, 4vw, 3.5rem)' }}
+                      >
                         {call.displayNumber}
                       </p>
                       <p className="text-xs text-zinc-500 mt-1">{call.windowLabel}</p>
@@ -170,12 +214,13 @@ export default function DisplayPage() {
           )}
         </main>
 
-        {/* Right: Queue Board (35%) */}
-        <aside className="w-80 border-l border-zinc-800/60 bg-zinc-900/30 flex flex-col">
+        {/* Right: Queue Board */}
+        <aside className="w-72 border-l border-zinc-800/60 bg-zinc-900/30 flex flex-col">
           <div className="px-5 py-4 border-b border-zinc-800/60">
             <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Queue Status</p>
             {state.totalWaiting > 0 && (
-              <p className="text-2xl font-bold text-amber-400 mt-0.5">{state.totalWaiting}
+              <p className="text-2xl font-bold text-amber-400 mt-0.5">
+                {state.totalWaiting}
                 <span className="text-sm font-normal text-zinc-500 ml-1">waiting</span>
               </p>
             )}
@@ -185,7 +230,7 @@ export default function DisplayPage() {
             {state.categories.length > 0 ? (
               state.categories.map((cat) => (
                 <div key={cat.code} className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-4">
-                  <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center justify-between mb-1.5">
                     <div className="flex items-center gap-2">
                       <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: cat.color }} />
                       <p className="text-xs font-semibold text-zinc-300 uppercase tracking-wide">{cat.code}</p>
@@ -204,20 +249,18 @@ export default function DisplayPage() {
                 </div>
               ))
             ) : (
-              <div className="flex flex-col items-center justify-center h-32 opacity-30">
-                <p className="text-zinc-600 text-sm text-center">Queue data will<br />appear here</p>
+              <div className="flex items-center justify-center h-32 opacity-30">
+                <p className="text-zinc-600 text-sm text-center">Queue data<br />appears here</p>
               </div>
             )}
           </div>
         </aside>
       </div>
 
-      {/* ── Ticker ────────────────────────────────────────────────── */}
+      {/* ── Ticker ─────────────────────────────────────────────────── */}
       <footer className="border-t border-zinc-800/60 bg-zinc-900/40 py-2.5 overflow-hidden flex-shrink-0">
         <p className="text-xs text-zinc-400 whitespace-nowrap animate-ticker" style={{ animationDuration: '40s' }}>
-          {state.tickerText ?? 'Welcome — Please take your ticket and wait to be called'}
-          {'   ·   '}
-          {state.tickerText ?? 'Welcome — Please take your ticket and wait to be called'}
+          {state.tickerText}{'   ·   '}{state.tickerText}
         </p>
       </footer>
     </div>
