@@ -39,6 +39,10 @@ jobs:
           pnpm --filter @announcement/shared build
           pnpm --filter @announcement/audio-engine build
 
+      - name: Rebuild native modules for Windows
+        working-directory: apps/desktop
+        run: npx electron-rebuild -f -w better-sqlite3
+
       - name: Build & package Windows installer
         run: pnpm --filter @announcement/desktop build:win
         env:
@@ -78,6 +82,13 @@ jobs:
         run: |
           pnpm --filter @announcement/shared build
           pnpm --filter @announcement/audio-engine build
+
+      - name: Install Linux packaging deps
+        run: sudo apt-get install -y rpm
+
+      - name: Rebuild native modules for Linux
+        working-directory: apps/desktop
+        run: npx electron-rebuild -f -w better-sqlite3
 
       - name: Build & package Linux installers
         run: pnpm --filter @announcement/desktop build:linux
