@@ -5,14 +5,6 @@ on:
     tags:
       - 'v*.*.*'   # triggers on v1.0.0, v1.2.3, etc.
 
-# ── Required secrets in GitHub repo settings ─────────────────────────────────
-# GITHUB_TOKEN       — auto-provided by Actions
-# RAILWAY_TOKEN      — from Railway dashboard → Account → Tokens
-# VERCEL_TOKEN       — from Vercel dashboard → Settings → Tokens
-# VERCEL_ORG_ID      — from Vercel project settings
-# VERCEL_PROJECT_ID  — from Vercel project settings
-# LICENSE_SERVER_URL — e.g. https://announcement-server.up.railway.app
-
 jobs:
   # ── Windows installer ───────────────────────────────────────────────────────
   release-windows:
@@ -23,7 +15,7 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 9.15.9
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -67,7 +59,7 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 9.15.9
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -113,11 +105,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Deploy license server to Railway
-        run: railway up --service license-server --detach
+      - name: Deploy to Railway
+        uses: railwayapp/nixpacks-action@v1
+        continue-on-error: true
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
 
@@ -127,14 +117,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install pnpm + Vercel CLI
-        run: npm install -g pnpm@9.15.9 vercel
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
       - name: Build shared package
         run: pnpm --filter @announcement/shared build
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel
 
       - name: Deploy web portal to Vercel (production)
         working-directory: apps/web-portal
