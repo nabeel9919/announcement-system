@@ -1,65 +1,27 @@
-import { BrowserWindow, ipcMain } from 'electron'
+import { ipcMain } from 'electron'
+import { exec } from 'child_process'
+import { promisify } from 'util'
+import { writeFile, unlink } from 'fs/promises'
+import { join } from 'path'
+import { tmpdir } from 'os'
 
-/**
- * Thermal ticket printing via Electron's print API.
- * Opens a hidden window, renders the ticket HTML, prints silently to default printer.
- */
-export function setupPrintHandlers(): void {
-  ipcMain.handle('print:ticket', async (_event, ticket: {
-    displayNumber: string
-    categoryLabel: string
-    organizationName: string
-    issuedAt: string
-    windowCount: number
-    _rawHtml?: string
-  }) => {
-    return new Promise<{ success: boolean; error?: string }>((resolve) => {
-      const printWindow = new BrowserWindow({
-        width: 320,
-        height: 480,
-        show: false,
-        webPreferences: { javascript: true },
-      })
+const execAsync = promisify(exec)
 
-      const html = ticket._rawHtml ?? buildTicketHtml(ticket)
-      printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+// ESC/POS command helpers
+const ESC = 0x1b
+const GS = 0x1d
 
-      printWindow.webContents.once('did-finish-load', () => {
-        printWindow.webContents.print(
-          {
-            silent: true,
-            printBackground: true,
-            margins: { marginType: 'none' },
-            pageSize: { width: 80000, height: 160000 }, // 80mm × 160mm in microns
-          },
-          (success, errorType) => {
-            printWindow.close()
-            if (success) {
-              resolve({ success: true })
-            } else {
-              resolve({ success: false, error: errorType ?? 'Print failed' })
-            }
-          }
-        )
-      })
-    })
-  })
+function esc(...bytes: number[]): Buffer { return Buffer.from([ESC, ...bytes]) }
+function gs(...bytes: number[]): Buffer { return Buffer.from([GS, ...bytes]) }
+function text(s: string): Buffer { return Buffer.from(s, 'latin1') }
+function lf(): Buffer { return Buffer.from([0x0a]) }
 
-  ipcMain.handle('print:listPrinters', async (_event) => {
-    const win = new BrowserWindow({ show: false })
-    const printers = await win.webContents.getPrintersAsync()
-    win.close()
-    return printers.map((p) => ({ name: p.name, isDefault: p.isDefault }))
-  })
-}
-
-function buildTicketHtml(ticket: {
+function buildEscPosTicket(ticket: {
   displayNumber: string
   categoryLabel: string
   organizationName: string
   issuedAt: string
-  windowCount: number
-}): string {
+}): Buffer {
   const time = new Date(ticket.issuedAt).toLocaleTimeString('en-TZ', {
     hour: '2-digit', minute: '2-digit', hour12: false,
   })
@@ -67,75 +29,102 @@ function buildTicketHtml(ticket: {
     day: '2-digit', month: 'short', year: 'numeric',
   })
 
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: 'Courier New', monospace;
-    width: 76mm;
-    padding: 4mm;
-    background: white;
-    color: black;
-    -webkit-print-color-adjust: exact;
-  }
-  .center { text-align: center; }
-  .org {
-    font-size: 11pt;
-    font-weight: bold;
-    text-align: center;
-    border-bottom: 1px dashed #000;
-    padding-bottom: 3mm;
-    margin-bottom: 3mm;
-  }
-  .category {
-    font-size: 9pt;
-    text-align: center;
-    color: #444;
-    margin-bottom: 2mm;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-  }
-  .number {
-    font-size: 44pt;
-    font-weight: bold;
-    text-align: center;
-    letter-spacing: 2px;
-    line-height: 1;
-    margin: 4mm 0;
-  }
-  .divider {
-    border-top: 1px dashed #000;
-    margin: 3mm 0;
-  }
-  .meta {
-    font-size: 8pt;
-    text-align: center;
-    color: #555;
-    line-height: 1.6;
-  }
-  .footer {
-    font-size: 7pt;
-    text-align: center;
-    color: #888;
-    margin-top: 3mm;
-    border-top: 1px dashed #000;
-    padding-top: 2mm;
-  }
-</style>
-</head>
-<body>
-  <div class="org">${ticket.organizationName}</div>
-  <div class="category">${ticket.categoryLabel}</div>
-  <div class="number">${ticket.displayNumber}</div>
-  <div class="divider"></div>
-  <div class="meta">
-    <div>${date} &nbsp;·&nbsp; ${time}</div>
-    <div>Please wait to be called</div>
-  </div>
-  <div class="footer">Powered by Announcement System</div>
-</body>
-</html>`
+  const parts: Buffer[] = []
+
+  // Init printer
+  parts.push(esc(0x40))                        // ESC @ — initialize
+  parts.push(esc(0x61, 0x01))                  // ESC a 1 — center align
+
+  // Organization name — bold
+  parts.push(esc(0x45, 0x01))                  // ESC E 1 — bold on
+  parts.push(text(ticket.organizationName))
+  parts.push(lf())
+  parts.push(esc(0x45, 0x00))                  // ESC E 0 — bold off
+
+  // Divider
+  parts.push(text('--------------------------------'))
+  parts.push(lf())
+
+  // Category
+  parts.push(text(ticket.categoryLabel.toUpperCase()))
+  parts.push(lf())
+  parts.push(lf())
+
+  // Big ticket number — double width + height
+  parts.push(gs(0x21, 0x33))                   // GS ! — 4x width, 4x height
+  parts.push(esc(0x45, 0x01))
+  parts.push(text(ticket.displayNumber))
+  parts.push(lf())
+  parts.push(gs(0x21, 0x00))                   // reset size
+  parts.push(esc(0x45, 0x00))
+
+  // Divider
+  parts.push(text('--------------------------------'))
+  parts.push(lf())
+
+  // Date/time
+  parts.push(text(`${date}  ${time}`))
+  parts.push(lf())
+  parts.push(text('Please wait to be called'))
+  parts.push(lf())
+
+  // Footer
+  parts.push(text('--------------------------------'))
+  parts.push(lf())
+  parts.push(text('Powered by Announcement System'))
+  parts.push(lf())
+
+  // Feed and cut
+  parts.push(lf())
+  parts.push(lf())
+  parts.push(lf())
+  parts.push(gs(0x56, 0x00))                   // GS V 0 — full cut
+
+  return Buffer.concat(parts)
+}
+
+export function setupPrintHandlers(): void {
+  ipcMain.handle('print:ticket', async (_event, ticket: {
+    displayNumber: string
+    categoryLabel: string
+    organizationName: string
+    issuedAt: string
+    windowCount: number
+  }) => {
+    try {
+      const printerName = await getDefaultPrinterName()
+      const data = buildEscPosTicket(ticket)
+
+      // Write to temp file and send via lp -o raw
+      const tmpFile = join(tmpdir(), `ticket-${Date.now()}.bin`)
+      await writeFile(tmpFile, data)
+      await execAsync(`lp -d ${printerName} -o raw "${tmpFile}"`)
+      await unlink(tmpFile).catch(() => {})
+
+      return { success: true }
+    } catch (e: unknown) {
+      console.error('[print:ticket] error:', e)
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('print:listPrinters', async () => {
+    try {
+      const { stdout } = await execAsync('lpstat -a 2>/dev/null || echo ""')
+      return stdout.trim().split('\n')
+        .filter(Boolean)
+        .map((line) => ({ name: line.split(' ')[0], isDefault: false }))
+    } catch {
+      return []
+    }
+  })
+}
+
+async function getDefaultPrinterName(): Promise<string> {
+  try {
+    const { stdout } = await execAsync('lpstat -d 2>/dev/null')
+    const match = stdout.match(/system default destination:\s+(\S+)/)
+    if (match) return match[1]
+  } catch { /* fall through */ }
+  return 'ZKT200'
 }

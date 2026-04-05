@@ -89,7 +89,7 @@ export default function KioskPage() {
         organizationName: config?.organizationName ?? 'Announcement System',
         issuedAt: ticket.createdAt,
         windowCount: config?.windowCount ?? 1,
-      }).catch(() => {/* no printer — ok */})
+      }).then((r) => console.log('[print] result:', r)).catch((e) => console.error('[print] error:', e))
 
       setTicketNumber(displayNumber)
       setStep('done')
