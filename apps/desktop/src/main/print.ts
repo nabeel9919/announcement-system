@@ -48,7 +48,6 @@ function buildEscPosTicket(ticket: {
   // Category
   parts.push(text(ticket.categoryLabel.toUpperCase()))
   parts.push(lf())
-  parts.push(lf())
 
   // Big ticket number — double width + height
   parts.push(gs(0x21, 0x33))                   // GS ! — 4x width, 4x height
@@ -78,6 +77,8 @@ function buildEscPosTicket(ticket: {
   parts.push(lf())
   parts.push(lf())
   parts.push(lf())
+  parts.push(lf())
+  parts.push(lf())
   parts.push(gs(0x56, 0x00))                   // GS V 0 — full cut
 
   return Buffer.concat(parts)
@@ -98,7 +99,7 @@ export function setupPrintHandlers(): void {
       // Write to temp file and send via lp -o raw
       const tmpFile = join(tmpdir(), `ticket-${Date.now()}.bin`)
       await writeFile(tmpFile, data)
-      await execAsync(`lp -d ${printerName} -o raw "${tmpFile}"`)
+      await execAsync(`lp -d ${printerName} -o raw -o page-left=0 -o page-right=0 -o page-top=0 -o page-bottom=0 "${tmpFile}"`)
       await unlink(tmpFile).catch(() => {})
 
       return { success: true }
