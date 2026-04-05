@@ -21,7 +21,7 @@ asarUnpack:
 # Windows (primary target)
 win:
   executableName: AnnouncementSystem
-  icon: build/icon.png
+  icon: build/icon.ico
   target:
     - target: nsis
       arch: [x64]
@@ -34,8 +34,8 @@ nsis:
   createStartMenuShortcut: true
   oneClick: false
   allowToChangeInstallationDirectory: true
-  installerIcon: build/icon.png
-  uninstallerIcon: build/icon.png
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
 
 # Linux
 linux:
