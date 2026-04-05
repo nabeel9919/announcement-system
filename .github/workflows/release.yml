@@ -111,10 +111,11 @@ jobs:
         run: npx electron-rebuild -f -w better-sqlite3
 
       - name: Build & package Linux installers
-        run: pnpm --filter @announcement/desktop build:linux -- --publish never
+        run: pnpm --filter @announcement/desktop build:linux
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LICENSE_SERVER_URL: ${{ secrets.LICENSE_SERVER_URL }}
+          EP_DRAFT: false
 
       - name: Upload Linux installers to release
         uses: softprops/action-gh-release@v2
