@@ -6,6 +6,7 @@
     "name": "Nabil",
     "email": "hamadnabil0081@gmail.com"
   },
+  "homepage": "https://github.com/nabeel9919/announcement-system",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "ELECTRON_RUN_AS_NODE= electron-vite dev",

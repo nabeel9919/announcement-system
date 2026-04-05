@@ -111,7 +111,7 @@ jobs:
         run: npx electron-rebuild -f -w better-sqlite3
 
       - name: Build & package Linux installers
-        run: pnpm --filter @announcement/desktop build:linux
+        run: pnpm --filter @announcement/desktop build:linux -- --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LICENSE_SERVER_URL: ${{ secrets.LICENSE_SERVER_URL }}
@@ -123,6 +123,7 @@ jobs:
             apps/desktop/dist/*.AppImage
             apps/desktop/dist/*.deb
           draft: false
+          fail_on_unmatched_files: false
           prerelease: ${{ contains(github.ref, '-beta') || contains(github.ref, '-rc') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
