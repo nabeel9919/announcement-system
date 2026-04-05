@@ -22,6 +22,7 @@ export default function SetupPage() {
   const [step, setStep] = useState<Step>('license')
   const [licenseKey, setLicenseKey] = useState('')
   const [orgName, setOrgName] = useState('')
+  const [serverUrl, setServerUrl] = useState('https://announcement-system-production.up.railway.app')
   const [licenseError, setLicenseError] = useState('')
   const [validating, setValidating] = useState(false)
 
@@ -46,6 +47,7 @@ export default function SetupPage() {
     setLicenseError('')
 
     try {
+      await window.api.config.setServerUrl(serverUrl.trim())
       const result = await window.api.license.validate(licenseKey.trim())
 
       if (!result.valid) {
@@ -183,6 +185,19 @@ export default function SetupPage() {
                     value={orgName}
                     onChange={(e) => setOrgName(e.target.value)}
                     placeholder="e.g. City Hospital, Julius Nyerere Airport"
+                    className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-zinc-300 mb-1.5">
+                    License Server URL
+                  </label>
+                  <input
+                    type="text"
+                    value={serverUrl}
+                    onChange={(e) => setServerUrl(e.target.value)}
+                    placeholder="https://your-server.up.railway.app"
                     className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                   />
                 </div>

@@ -68,7 +68,8 @@ export function setupIpcHandlers(): void {
 
   ipcMain.handle('license:validate', async (_event, key: string) => {
     try {
-      const { getMachineId } = await import('node-machine-id')
+      const mod = await import('node-machine-id')
+      const getMachineId = mod.machineId ?? mod.default?.machineId
       const machineId = await getMachineId()
       const config = readLocalConfig()
       const serverUrl = config.licenseServerUrl ?? process.env.LICENSE_SERVER_URL ?? 'http://localhost:3001'
@@ -80,7 +81,8 @@ export function setupIpcHandlers(): void {
         signal: AbortSignal.timeout(10_000),
       })
       return await res.json()
-    } catch {
+    } catch (e) {
+      console.error('[license:validate] error:', e)
       return { valid: false, error: 'Cannot reach license server. Make sure it is running on port 3001.' }
     }
   })

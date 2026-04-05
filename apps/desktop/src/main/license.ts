@@ -59,7 +59,8 @@ export async function checkLicense(): Promise<LicenseCheckResult> {
 
   // Attempt online validation
   try {
-    const { getMachineId } = await import('node-machine-id')
+    const mod = await import('node-machine-id')
+    const getMachineId = mod.machineId ?? mod.default?.machineId
     const machineId = await getMachineId()
 
     const response = await fetch(`${serverUrl}/api/licenses/validate`, {
