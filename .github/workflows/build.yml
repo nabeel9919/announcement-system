@@ -20,7 +20,7 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 9.15.9
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -36,6 +36,10 @@ jobs:
 
       - name: Build audio engine
         run: pnpm --filter @announcement/audio-engine build
+
+      - name: Generate Prisma client
+        working-directory: packages/license-server
+        run: npx prisma@5 generate --schema=src/db/schema.prisma
 
       - name: Build license server
         run: pnpm --filter @announcement/license-server build
