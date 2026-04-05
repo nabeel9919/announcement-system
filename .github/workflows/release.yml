@@ -102,18 +102,22 @@ jobs:
   # ── Deploy license server to Railway ───────────────────────────────────────
   deploy-railway:
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
       - name: Deploy to Railway
-        uses: railwayapp/nixpacks-action@v1
-        continue-on-error: true
+        run: railway up --detach
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
 
   # ── Deploy web portal to Vercel ─────────────────────────────────────────────
   deploy-vercel:
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
