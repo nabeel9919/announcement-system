@@ -76,18 +76,24 @@ export function createDisplayWindow(screenIndex = 1): BrowserWindow {
   const target = displays[screenIndex] ?? displays[displays.length - 1]
   const { x, y, width, height } = target.bounds
 
-  // In dev: open as a normal resizable window on the primary screen (easier to test)
-  const devOptions = is.dev
+  // Primary screen (index 0): windowed so it doesn't cover the operator panel.
+  // External screen (index > 0): fullscreen, always-on-top — proper TV output.
+  const isPrimary = screenIndex === 0
+
+  const prodOptions = isPrimary
     ? {
-        x: Math.round(x + width * 0.5),
-        y: Math.round(y + 20),
-        width: Math.round(width * 0.48),
-        height: Math.round(height * 0.9),
+        // Windowed preview mode on the operator's own screen
+        x: Math.round(x + width * 0.05),
+        y: Math.round(y + 40),
+        width: Math.round(width * 0.55),
+        height: Math.round(height * 0.85),
         fullscreen: false,
         alwaysOnTop: false,
         frame: true,
+        resizable: true,
       }
     : {
+        // True fullscreen on external TV/projector
         x,
         y,
         width,
@@ -95,13 +101,26 @@ export function createDisplayWindow(screenIndex = 1): BrowserWindow {
         fullscreen: true,
         alwaysOnTop: true,
         frame: false,
+        resizable: false,
       }
 
+  // In dev: always windowed (right-half of screen) for easy side-by-side testing
+  const devOptions = {
+    x: Math.round(x + width * 0.5),
+    y: Math.round(y + 20),
+    width: Math.round(width * 0.48),
+    height: Math.round(height * 0.9),
+    fullscreen: false,
+    alwaysOnTop: false,
+    frame: true,
+    resizable: true,
+  }
+
   const win = new BrowserWindow({
-    ...devOptions,
+    ...(is.dev ? devOptions : prodOptions),
     title: `Announcement System — Display (Screen ${screenIndex + 1})`,
     backgroundColor: '#09090b',
-    skipTaskbar: !is.dev,
+    skipTaskbar: !is.dev && !isPrimary,
     autoHideMenuBar: true,
     webPreferences: sharedPrefs(),
   })

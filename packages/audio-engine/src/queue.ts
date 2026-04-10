@@ -8,22 +8,12 @@ export class AnnouncementQueue {
 
   enqueue(task: () => Promise<void>): void {
     this.queue.push(task)
-    if (!this.running) {
-      this.flush()
-    }
+    if (!this.running) this.flush()
   }
 
-  private async flush(): Promise<void> {
-    this.running = true
-    while (this.queue.length > 0) {
-      const task = this.queue.shift()!
-      try {
-        await task()
-      } catch (err) {
-        console.error('[AudioQueue] announcement failed:', err)
-      }
-    }
-    this.running = false
+  /** Drop the oldest pending item (not the currently running one) to prevent pile-up. */
+  dropOldest(): void {
+    if (this.queue.length > 0) this.queue.shift()
   }
 
   clear(): void {
@@ -32,5 +22,16 @@ export class AnnouncementQueue {
 
   get length(): number {
     return this.queue.length
+  }
+
+  private async flush(): Promise<void> {
+    this.running = true
+    while (this.queue.length > 0) {
+      const task = this.queue.shift()!
+      try { await task() } catch (err) {
+        console.error('[AudioQueue] announcement failed:', err)
+      }
+    }
+    this.running = false
   }
 }

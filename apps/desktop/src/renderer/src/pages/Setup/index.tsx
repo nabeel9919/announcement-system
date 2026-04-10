@@ -3,16 +3,15 @@ import { useAppStore } from '../../store/app'
 import type { Sector, CallingMode, SupportedLanguage } from '@announcement/shared'
 import { SECTOR_PRESETS, CALLING_MODES } from '@announcement/shared'
 import { cn, generateId } from '../../lib/utils'
-import { Check, ChevronRight, Building2, Mic, KeyRound, MonitorPlay, Loader2 } from 'lucide-react'
+import { Check, ChevronRight, Building2, Mic, KeyRound, MonitorPlay, Loader2, Sparkles } from 'lucide-react'
 
-type Step = 'license' | 'sector' | 'mode' | 'windows' | 'audio' | 'complete'
+type Step = 'license' | 'sector' | 'mode' | 'windows' | 'complete'
 
 const STEPS: { id: Step; label: string; icon: React.ElementType }[] = [
   { id: 'license', label: 'Activation', icon: KeyRound },
   { id: 'sector', label: 'Sector', icon: Building2 },
   { id: 'mode', label: 'Calling Mode', icon: Mic },
   { id: 'windows', label: 'Windows', icon: MonitorPlay },
-  { id: 'audio', label: 'Audio', icon: Mic },
   { id: 'complete', label: 'Done', icon: Check },
 ]
 
@@ -56,7 +55,6 @@ export default function SetupPage() {
         return
       }
 
-      // Auto-fill org name from license record
       if (result.license?.organizationName) {
         setOrgName(result.license.organizationName)
       }
@@ -90,10 +88,8 @@ export default function SetupPage() {
       categories,
     }
 
-    // Persist to local config
     await window.api.config.write({ isSetupComplete: true, installationConfig })
 
-    // Save categories and windows to DB
     for (const cat of categories) {
       await window.api.categories.upsert({
         id: cat.id,
@@ -114,70 +110,96 @@ export default function SetupPage() {
   }
 
   return (
-    <div className="flex h-screen bg-zinc-950 text-zinc-50">
+    <div className="flex h-screen text-zinc-50" style={{ background: '#0a0a0f' }}>
+
       {/* Sidebar */}
-      <div className="w-64 border-r border-zinc-800 bg-zinc-900/50 flex flex-col">
-        <div className="p-6 border-b border-zinc-800">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-primary-600 flex items-center justify-center">
-              <MonitorPlay className="w-4 h-4 text-white" />
+      <div
+        className="w-60 flex flex-col border-r border-zinc-800/60 flex-shrink-0"
+        style={{ background: 'rgba(255,255,255,0.02)' }}
+      >
+        {/* Brand */}
+        <div className="px-5 py-6 border-b border-zinc-800/60">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center flex-shrink-0">
+              <MonitorPlay className="w-4.5 h-4.5 text-white" />
             </div>
             <div>
-              <p className="text-sm font-semibold text-zinc-100">Announcement</p>
-              <p className="text-xs text-zinc-500">System Setup</p>
+              <p className="text-sm font-bold text-zinc-100 leading-tight">Announcement</p>
+              <p className="text-xs text-zinc-500 mt-0.5">System Setup</p>
             </div>
           </div>
         </div>
 
-        <nav className="flex-1 p-4 space-y-1">
+        {/* Steps nav */}
+        <nav className="flex-1 px-3 py-4 space-y-0.5">
           {STEPS.map((s, idx) => {
             const isDone = idx < currentStepIdx
             const isCurrent = s.id === step
-            const Icon = s.icon
             return (
               <div
                 key={s.id}
                 className={cn(
-                  'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors',
-                  isCurrent && 'bg-primary-600/20 text-primary-400',
+                  'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm',
+                  isCurrent && 'bg-indigo-600/15 text-indigo-300',
                   isDone && 'text-zinc-400',
                   !isCurrent && !isDone && 'text-zinc-600'
                 )}
               >
                 <div
                   className={cn(
-                    'w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 text-xs',
-                    isDone && 'bg-primary-600 text-white',
-                    isCurrent && 'border-2 border-primary-500 text-primary-400',
-                    !isCurrent && !isDone && 'border border-zinc-700 text-zinc-600'
+                    'w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 text-[10px] font-bold',
+                    isDone && 'bg-indigo-600 text-white',
+                    isCurrent && 'ring-2 ring-indigo-500 text-indigo-400',
+                    !isCurrent && !isDone && 'ring-1 ring-zinc-700 text-zinc-600'
                   )}
                 >
-                  {isDone ? <Check className="w-3 h-3" /> : idx + 1}
+                  {isDone ? <Check className="w-2.5 h-2.5" /> : idx + 1}
                 </div>
-                {s.label}
+                <span className={cn('font-medium', isCurrent && 'text-zinc-100', isDone && 'text-zinc-400')}>
+                  {s.label}
+                </span>
+                {isCurrent && (
+                  <div className="ml-auto w-1.5 h-1.5 rounded-full bg-indigo-500" />
+                )}
               </div>
             )
           })}
         </nav>
 
-        <div className="p-4 border-t border-zinc-800">
-          <p className="text-xs text-zinc-600">Version 1.0.0</p>
+        <div className="px-5 py-4 border-t border-zinc-800/60">
+          <p className="text-[11px] text-zinc-600">v1.0.0 — First-time setup</p>
         </div>
       </div>
 
       {/* Main content */}
-      <div className="flex-1 flex items-center justify-center p-12">
-        <div className="w-full max-w-lg animate-fade-in">
+      <div className="flex-1 flex items-center justify-center p-12 overflow-y-auto">
+        <div className="w-full max-w-md">
 
-          {/* STEP: License */}
+          {/* Progress bar */}
+          <div className="mb-8">
+            <div className="flex justify-between text-xs text-zinc-600 mb-1.5">
+              <span>Step {currentStepIdx + 1} of {STEPS.length}</span>
+              <span>{Math.round(((currentStepIdx) / (STEPS.length - 1)) * 100)}%</span>
+            </div>
+            <div className="h-0.5 bg-zinc-800 rounded-full">
+              <div
+                className="h-full bg-indigo-500 rounded-full transition-all duration-500"
+                style={{ width: `${(currentStepIdx / (STEPS.length - 1)) * 100}%` }}
+              />
+            </div>
+          </div>
+
+          {/* ── STEP: License ── */}
           {step === 'license' && (
             <div>
-              <h1 className="text-2xl font-bold text-zinc-100 mb-1">Activate Your License</h1>
-              <p className="text-zinc-500 mb-8">Enter your 20-character license key to get started.</p>
+              <div className="mb-7">
+                <h1 className="text-2xl font-bold text-zinc-50 mb-1.5">Activate Your License</h1>
+                <p className="text-sm text-zinc-500">Enter your 20-character license key to get started.</p>
+              </div>
 
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-zinc-300 mb-1.5">
+                  <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-2">
                     Organization Name
                   </label>
                   <input
@@ -185,12 +207,12 @@ export default function SetupPage() {
                     value={orgName}
                     onChange={(e) => setOrgName(e.target.value)}
                     placeholder="e.g. City Hospital, Julius Nyerere Airport"
-                    className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                    className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-zinc-300 mb-1.5">
+                  <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-2">
                     License Server URL
                   </label>
                   <input
@@ -198,12 +220,12 @@ export default function SetupPage() {
                     value={serverUrl}
                     onChange={(e) => setServerUrl(e.target.value)}
                     placeholder="https://your-server.up.railway.app"
-                    className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                    className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-zinc-300 mb-1.5">
+                  <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-2">
                     License Key
                   </label>
                   <input
@@ -212,56 +234,57 @@ export default function SetupPage() {
                     onChange={(e) => setLicenseKey(e.target.value.toUpperCase())}
                     placeholder="XXXXX-XXXXX-XXXXX-XXXXX"
                     maxLength={23}
-                    className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3.5 py-2.5 text-sm font-mono text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent tracking-widest"
+                    className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-3.5 py-2.5 text-sm font-mono text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 tracking-widest transition-colors"
                   />
                   {licenseError && (
-                    <p className="mt-1.5 text-xs text-red-400">{licenseError}</p>
+                    <p className="mt-2 text-xs text-red-400 flex items-center gap-1.5">
+                      <span className="w-1 h-1 rounded-full bg-red-400 flex-shrink-0" />
+                      {licenseError}
+                    </p>
                   )}
                 </div>
 
                 <button
                   onClick={handleValidateLicense}
                   disabled={validating}
-                  className="w-full flex items-center justify-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-500 disabled:opacity-50 px-4 py-2.5 text-sm font-semibold text-white transition-colors mt-2"
+                  className="w-full flex items-center justify-center gap-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2.5 text-sm font-semibold text-white transition-colors mt-2"
                 >
                   {validating ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Validating...
-                    </>
+                    <><Loader2 className="w-4 h-4 animate-spin" />Validating...</>
                   ) : (
-                    <>
-                      Activate License
-                      <ChevronRight className="w-4 h-4" />
-                    </>
+                    <>Activate License<ChevronRight className="w-4 h-4" /></>
                   )}
                 </button>
               </div>
             </div>
           )}
 
-          {/* STEP: Sector */}
+          {/* ── STEP: Sector ── */}
           {step === 'sector' && (
             <div>
-              <h1 className="text-2xl font-bold text-zinc-100 mb-1">Select Your Sector</h1>
-              <p className="text-zinc-500 mb-8">
-                This configures default departments, window names, and announcement templates.
-              </p>
+              <div className="mb-7">
+                <h1 className="text-2xl font-bold text-zinc-50 mb-1.5">Select Your Sector</h1>
+                <p className="text-sm text-zinc-500">
+                  Configures department names, window labels, and announcement templates.
+                </p>
+              </div>
 
-              <div className="grid grid-cols-3 gap-3 mb-8">
-                {(Object.values(SECTOR_PRESETS)).map((preset) => (
+              <div className="grid grid-cols-3 gap-2.5 mb-8">
+                {Object.values(SECTOR_PRESETS).map((preset) => (
                   <button
                     key={preset.sector}
                     onClick={() => setSector(preset.sector)}
                     className={cn(
                       'flex flex-col items-center gap-2 rounded-xl border p-4 text-center transition-all',
                       sector === preset.sector
-                        ? 'border-primary-500 bg-primary-600/20 text-primary-300'
-                        : 'border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-300'
+                        ? 'border-indigo-500 bg-indigo-600/15 text-indigo-300'
+                        : 'border-zinc-800 bg-zinc-900/40 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300 hover:bg-zinc-900/60'
                     )}
                   >
                     <span className="text-2xl">{preset.icon}</span>
-                    <span className="text-xs font-medium leading-tight">{preset.label}</span>
+                    <span className={cn('text-xs font-semibold leading-tight', sector === preset.sector ? 'text-indigo-200' : 'text-zinc-400')}>
+                      {preset.label}
+                    </span>
                   </button>
                 ))}
               </div>
@@ -269,13 +292,13 @@ export default function SetupPage() {
               <div className="flex gap-3">
                 <button
                   onClick={() => setStep('license')}
-                  className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800/50 px-4 py-2.5 text-sm font-medium text-zinc-300 hover:bg-zinc-800 transition-colors"
+                  className="flex-1 rounded-lg border border-zinc-800 bg-zinc-900/40 px-4 py-2.5 text-sm font-medium text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-300 transition-colors"
                 >
                   Back
                 </button>
                 <button
                   onClick={() => setStep('mode')}
-                  className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-500 px-4 py-2.5 text-sm font-semibold text-white transition-colors"
+                  className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-2.5 text-sm font-semibold text-white transition-colors"
                 >
                   Continue <ChevronRight className="w-4 h-4" />
                 </button>
@@ -283,80 +306,108 @@ export default function SetupPage() {
             </div>
           )}
 
-          {/* STEP: Calling Mode */}
+          {/* ── STEP: Calling Mode ── */}
           {step === 'mode' && (
             <div>
-              <h1 className="text-2xl font-bold text-zinc-100 mb-1">Calling Mode</h1>
-              <p className="text-zinc-500 mb-8">How will patients or customers be called to service?</p>
+              <div className="mb-7">
+                <h1 className="text-2xl font-bold text-zinc-50 mb-1.5">Calling Mode</h1>
+                <p className="text-sm text-zinc-500">How will customers be summoned to service?</p>
+              </div>
 
-              <div className="space-y-3 mb-8">
-                {(Object.values(CALLING_MODES)).map((mode) => (
+              <div className="space-y-2.5 mb-8">
+                {Object.values(CALLING_MODES).map((mode) => (
                   <button
                     key={mode.mode}
                     onClick={() => setCallingMode(mode.mode)}
                     className={cn(
                       'w-full text-left rounded-xl border p-4 transition-all',
                       callingMode === mode.mode
-                        ? 'border-primary-500 bg-primary-600/20'
-                        : 'border-zinc-800 bg-zinc-900/60 hover:border-zinc-700'
+                        ? 'border-indigo-500 bg-indigo-600/10'
+                        : 'border-zinc-800 bg-zinc-900/40 hover:border-zinc-700 hover:bg-zinc-900/60'
                     )}
                   >
                     <div className="flex items-start justify-between gap-4">
                       <div>
-                        <p className={cn('text-sm font-semibold mb-0.5', callingMode === mode.mode ? 'text-primary-300' : 'text-zinc-100')}>
+                        <p className={cn(
+                          'text-sm font-semibold mb-1',
+                          callingMode === mode.mode ? 'text-indigo-200' : 'text-zinc-200'
+                        )}>
                           {mode.label}
                         </p>
                         <p className="text-xs text-zinc-500 leading-relaxed">{mode.description}</p>
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           {mode.features.map((f) => (
-                            <span key={f} className="text-xs text-zinc-600 bg-zinc-800 rounded px-1.5 py-0.5">
+                            <span key={f} className="text-[10px] text-zinc-600 bg-zinc-800/80 rounded px-1.5 py-0.5 font-medium">
                               {f}
                             </span>
                           ))}
                         </div>
                       </div>
-                      {callingMode === mode.mode && (
-                        <div className="w-5 h-5 rounded-full bg-primary-600 flex items-center justify-center flex-shrink-0 mt-0.5">
-                          <Check className="w-3 h-3 text-white" />
-                        </div>
-                      )}
+                      <div className={cn(
+                        'w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 transition-all',
+                        callingMode === mode.mode
+                          ? 'bg-indigo-600 ring-2 ring-indigo-500/30'
+                          : 'ring-1 ring-zinc-700'
+                      )}>
+                        {callingMode === mode.mode && <Check className="w-2.5 h-2.5 text-white" />}
+                      </div>
                     </div>
                   </button>
                 ))}
               </div>
 
               <div className="flex gap-3">
-                <button onClick={() => setStep('sector')} className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800/50 px-4 py-2.5 text-sm font-medium text-zinc-300 hover:bg-zinc-800 transition-colors">Back</button>
-                <button onClick={() => setStep('windows')} className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-500 px-4 py-2.5 text-sm font-semibold text-white transition-colors">
+                <button
+                  onClick={() => setStep('sector')}
+                  className="flex-1 rounded-lg border border-zinc-800 bg-zinc-900/40 px-4 py-2.5 text-sm font-medium text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-300 transition-colors"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={() => setStep('windows')}
+                  className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-2.5 text-sm font-semibold text-white transition-colors"
+                >
                   Continue <ChevronRight className="w-4 h-4" />
                 </button>
               </div>
             </div>
           )}
 
-          {/* STEP: Windows */}
+          {/* ── STEP: Windows + Language ── */}
           {step === 'windows' && (
             <div>
-              <h1 className="text-2xl font-bold text-zinc-100 mb-1">Service Windows</h1>
-              <p className="text-zinc-500 mb-8">How many windows or counters will be active?</p>
+              <div className="mb-7">
+                <h1 className="text-2xl font-bold text-zinc-50 mb-1.5">Service Windows</h1>
+                <p className="text-sm text-zinc-500">How many windows or counters will be active?</p>
+              </div>
 
-              <div className="flex items-center gap-6 mb-8 p-6 rounded-xl border border-zinc-800 bg-zinc-900/60">
+              {/* Window count picker */}
+              <div
+                className="flex items-center gap-6 mb-6 p-5 rounded-xl border border-zinc-800 bg-zinc-900/40"
+              >
                 <button
                   onClick={() => setWindowCount(Math.max(1, windowCount - 1))}
-                  className="w-10 h-10 rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center text-zinc-300 hover:bg-zinc-700 text-lg font-bold transition-colors"
-                >—</button>
+                  className="w-10 h-10 rounded-lg border border-zinc-700 bg-zinc-800/80 flex items-center justify-center text-zinc-300 hover:bg-zinc-700 text-lg font-bold transition-colors flex-shrink-0"
+                >
+                  −
+                </button>
                 <div className="flex-1 text-center">
-                  <p className="text-5xl font-display font-extrabold text-primary-400">{windowCount}</p>
-                  <p className="text-sm text-zinc-500 mt-1">windows / counters</p>
+                  <p className="text-5xl font-extrabold text-indigo-400 tabular-nums leading-none">{windowCount}</p>
+                  <p className="text-xs text-zinc-500 mt-1.5 font-medium">service windows</p>
                 </div>
                 <button
                   onClick={() => setWindowCount(Math.min(20, windowCount + 1))}
-                  className="w-10 h-10 rounded-lg border border-zinc-700 bg-zinc-800 flex items-center justify-center text-zinc-300 hover:bg-zinc-700 text-lg font-bold transition-colors"
-                >+</button>
+                  className="w-10 h-10 rounded-lg border border-zinc-700 bg-zinc-800/80 flex items-center justify-center text-zinc-300 hover:bg-zinc-700 text-lg font-bold transition-colors flex-shrink-0"
+                >
+                  +
+                </button>
               </div>
 
+              {/* Language */}
               <div className="mb-8">
-                <label className="block text-sm font-medium text-zinc-300 mb-3">Language</label>
+                <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-3">
+                  Announcement Language
+                </label>
                 <div className="grid grid-cols-2 gap-2">
                   {(['en', 'sw', 'ar', 'fr'] as const).map((lang) => (
                     <button
@@ -365,43 +416,58 @@ export default function SetupPage() {
                       className={cn(
                         'rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors',
                         language === lang
-                          ? 'border-primary-500 bg-primary-600/20 text-primary-300'
-                          : 'border-zinc-700 bg-zinc-800/50 text-zinc-400 hover:border-zinc-600'
+                          ? 'border-indigo-500 bg-indigo-600/15 text-indigo-200'
+                          : 'border-zinc-800 bg-zinc-900/40 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300'
                       )}
                     >
-                      {{ en: 'English', sw: 'Swahili', ar: 'Arabic (عربي)', fr: 'French' }[lang]}
+                      {{ en: 'English', sw: 'Kiswahili', ar: 'العربية', fr: 'Français' }[lang]}
                     </button>
                   ))}
                 </div>
               </div>
 
               <div className="flex gap-3">
-                <button onClick={() => setStep('mode')} className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800/50 px-4 py-2.5 text-sm font-medium text-zinc-300 hover:bg-zinc-800 transition-colors">Back</button>
-                <button onClick={handleFinish} className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-500 px-4 py-2.5 text-sm font-semibold text-white transition-colors">
+                <button
+                  onClick={() => setStep('mode')}
+                  className="flex-1 rounded-lg border border-zinc-800 bg-zinc-900/40 px-4 py-2.5 text-sm font-medium text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-300 transition-colors"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={handleFinish}
+                  className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-2.5 text-sm font-semibold text-white transition-colors"
+                >
                   Finish Setup <Check className="w-4 h-4" />
                 </button>
               </div>
             </div>
           )}
 
-          {/* STEP: Complete */}
+          {/* ── STEP: Complete ── */}
           {step === 'complete' && (
             <div className="text-center">
-              <div className="w-20 h-20 rounded-full bg-primary-600/20 border-2 border-primary-500 flex items-center justify-center mx-auto mb-6">
-                <Check className="w-10 h-10 text-primary-400" />
+              <div className="relative inline-block mb-6">
+                <div className="w-20 h-20 rounded-2xl bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center">
+                  <Check className="w-10 h-10 text-indigo-400" />
+                </div>
+                <div className="absolute -top-1 -right-1">
+                  <Sparkles className="w-5 h-5 text-amber-400" />
+                </div>
               </div>
-              <h1 className="text-2xl font-bold text-zinc-100 mb-2">Setup Complete</h1>
-              <p className="text-zinc-500 mb-8">
-                Your announcement system is ready. Launch the operator panel to start calling.
+              <h1 className="text-2xl font-bold text-zinc-50 mb-2">Setup Complete!</h1>
+              <p className="text-sm text-zinc-500 mb-8 leading-relaxed">
+                Your announcement system is configured and ready.<br />
+                Open the operator panel to start calling.
               </p>
               <button
-                onClick={() => setPage('operator')}
-                className="inline-flex items-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-500 px-6 py-3 text-sm font-semibold text-white transition-colors"
+                onClick={() => setPage('login')}
+                className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 px-7 py-3 text-sm font-semibold text-white transition-colors"
               >
                 Open Operator Panel <ChevronRight className="w-4 h-4" />
               </button>
             </div>
           )}
+
         </div>
       </div>
     </div>

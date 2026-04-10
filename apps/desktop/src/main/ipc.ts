@@ -1,11 +1,14 @@
-import { ipcMain, app } from 'electron'
+import { ipcMain, app, protocol, net } from 'electron'
 import Database from 'better-sqlite3'
 import { join } from 'path'
+import { pathToFileURL } from 'url'
 import { readLocalConfig, writeLocalConfig } from './license'
+import { isPiperAvailable, synthesizeWithPiper, getPiperBin, getPiperModel } from './piper-synth'
+import { listVideos, addVideo, deleteVideo, reorderVideos, getVideosDir } from './video-manager'
 
 let db: Database.Database | null = null
 
-function getDb(): Database.Database {
+export function getDb(): Database.Database {
   if (!db) {
     const dbPath = join(app.getPath('userData'), 'queue.db')
     db = new Database(dbPath)
@@ -90,6 +93,19 @@ export function setupIpcHandlers(): void {
   // ─── Config ──────────────────────────────────────────────────────────────
 
   ipcMain.handle('config:read', () => readLocalConfig())
+
+  /** Verify admin PIN — returns true/false */
+  ipcMain.handle('config:verifyPin', (_event, pin: string) => {
+    const config = readLocalConfig()
+    const stored = (config as any).adminPin ?? '0000'
+    return pin === stored
+  })
+
+  /** Set a new admin PIN */
+  ipcMain.handle('config:setPin', (_event, pin: string) => {
+    writeLocalConfig({ adminPin: pin } as any)
+    return true
+  })
 
   ipcMain.handle('config:write', (_event, config: Record<string, unknown>) => {
     writeLocalConfig(config)
@@ -292,5 +308,87 @@ export function setupIpcHandlers(): void {
       served: (db.prepare(`SELECT COUNT(*) as c FROM tickets WHERE status = 'served' AND created_at LIKE ?`).get(`${today}%`) as any).c,
       skipped: (db.prepare(`SELECT COUNT(*) as c FROM tickets WHERE status = 'skipped' AND created_at LIKE ?`).get(`${today}%`) as any).c,
     }
+  })
+
+  // ─── LAN server ───────────────────────────────────────────────────────────
+
+  // Getter is set by index.ts once the LAN server is started
+  let lanUrlGetter: (() => string | null) | null = null
+
+  ipcMain.handle('lan:getUrl', () => (lanUrlGetter ? lanUrlGetter() : null))
+
+  // Called by index.ts to register the URL getter after server starts
+  ;(global as any).__setLanUrlGetter = (fn: () => string | null) => { lanUrlGetter = fn }
+
+  // ─── Piper TTS ────────────────────────────────────────────────────────────
+
+  /** Returns { available, binPath, modelPath } for diagnostics */
+  ipcMain.handle('piper:status', (_event, lang = 'sw') => {
+    return {
+      available: isPiperAvailable(lang as string),
+      binPath: getPiperBin(),
+      modelPath: getPiperModel(lang as string),
+    }
+  })
+
+  /** Synthesize text with Piper — returns base64-encoded WAV string */
+  ipcMain.handle('piper:synthesize', async (_event, text: string, lang = 'sw') => {
+    const wav = await synthesizeWithPiper(text, lang as string)
+    return wav.toString('base64')
+  })
+
+  // ─── Video management ─────────────────────────────────────────────────────
+
+  /**
+   * Build a local-video:// URL for a given filename.
+   * The custom protocol (registered with stream:true) handles range requests so
+   * <video> can seek. Using file:// directly fails in dev because the renderer
+   * origin (http://localhost) is cross-origin to file://.
+   */
+  function videoUrl(name: string): string {
+    return `local-video://videos/${encodeURIComponent(name)}`
+  }
+
+  /** Returns ordered list of videos with local-video:// URLs */
+  ipcMain.handle('videos:list', () => {
+    return listVideos().map((v) => ({ ...v, fileUrl: videoUrl(v.name) }))
+  })
+
+  /** Open file picker, copy selected videos to userData/videos/, return updated list */
+  ipcMain.handle('videos:add', async () => {
+    const result = await addVideo()
+    if (!result) return null
+    return result.map((v) => ({ ...v, fileUrl: videoUrl(v.name) }))
+  })
+
+  /** Delete a video by filename, return updated list */
+  ipcMain.handle('videos:delete', (_event, name: string) => {
+    return deleteVideo(name).map((v) => ({ ...v, fileUrl: videoUrl(v.name) }))
+  })
+
+  /** Save new playlist order */
+  ipcMain.handle('videos:reorder', (_event, orderedNames: string[]) => {
+    return reorderVideos(orderedNames).map((v) => ({ ...v, fileUrl: videoUrl(v.name) }))
+  })
+
+  /** Returns the videos directory path */
+  ipcMain.handle('videos:getDir', () => getVideosDir())
+}
+
+/**
+ * Register a custom protocol `local-video://` so the renderer can load
+ * videos from userData without needing file:// permission overrides.
+ * Call this BEFORE app.whenReady() using protocol.registerSchemesAsPrivileged().
+ */
+export function registerVideoProtocol() {
+  protocol.handle('local-video', (request) => {
+    const url = new URL(request.url)
+    const dir = getVideosDir()
+    // local-video://videos/filename.mp4  →  hostname="videos"  pathname="/filename.mp4"
+    // local-video:///filename.mp4        →  hostname=""         pathname="/filename.mp4"
+    // Both forms work — just strip the leading slash from pathname
+    const filename = decodeURIComponent(url.pathname.replace(/^\//, ''))
+    const filePath = join(dir, filename)
+    return net.fetch(pathToFileURL(filePath).href)
   })
 }

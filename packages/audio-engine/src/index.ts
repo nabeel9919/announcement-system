@@ -2,28 +2,42 @@ import type { AnnouncementConfig, AppSettings } from '@announcement/shared'
 import { AnnouncementQueue } from './queue'
 import { WebSpeechProvider } from './providers/web-speech'
 import { GoogleTTSProvider } from './providers/google-tts'
+import { PiperProvider } from './providers/piper'
 
 export { AnnouncementQueue } from './queue'
 export { WebSpeechProvider } from './providers/web-speech'
 export { GoogleTTSProvider } from './providers/google-tts'
+export { PiperProvider } from './providers/piper'
 
 /**
  * Main audio engine — abstracts over TTS providers with automatic fallback.
  *
  * Priority:
- *  1. Google TTS / ElevenLabs (if configured and online)
- *  2. Web Speech API (always available, offline)
+ *  1. Google TTS (if configured and license server reachable)
+ *  2. Web Speech API (offline, always available)
+ *
+ * Production-ready fixes:
+ *  - Chrome Web Speech silent death → keepalive + hard timeout (in WebSpeechProvider)
+ *  - Voices not loaded on first call → async getVoices()
+ *  - Queue overflow protection — drops excess if queue > 3
+ *  - Multilingual: primary language + optional second-language repeat
  */
 export class AudioEngine {
   private queue = new AnnouncementQueue()
   private webSpeech: WebSpeechProvider
   private googleTTS: GoogleTTSProvider | null = null
+  private piper: PiperProvider | null = null
   private config: AnnouncementConfig
   private chimeAudio: HTMLAudioElement | null = null
 
   constructor(config: AnnouncementConfig, licenseServerUrl?: string) {
     this.config = config
     this.webSpeech = new WebSpeechProvider(config)
+
+    if (config.provider === 'piper') {
+      const lang = config.language.split('-')[0].toLowerCase()
+      this.piper = new PiperProvider(lang, config.volume)
+    }
 
     if (licenseServerUrl && config.provider === 'google_tts') {
       this.googleTTS = new GoogleTTSProvider({
@@ -38,62 +52,119 @@ export class AudioEngine {
 
     if (config.chimeUrl) {
       this.chimeAudio = new Audio(config.chimeUrl)
-      this.chimeAudio.volume = config.volume
+      this.chimeAudio.volume = Math.max(0, Math.min(1, config.volume))
     }
   }
 
   /**
-   * Announce text. Plays chime first if configured, then speaks text.
-   * Calls are automatically serialized — never overlap.
+   * Announce text. Chime → primary language → optional second language.
+   * Calls are serialized — never overlap.
+   * If queue is already backed up by 3+, drops the oldest pending to avoid pile-up.
    */
   announce(text: string, langOverride?: string): void {
+    // Overflow protection: if queue is backed up, clear excess
+    if (this.queue.length > 2) {
+      this.queue.dropOldest()
+    }
+
     this.queue.enqueue(async () => {
-      // Play chime
-      if (this.chimeAudio) {
-        await this.playChime()
+      // Chime
+      if (this.chimeAudio) await this.playChime()
+      await this.delay(250)
+
+      // Primary speech
+      await this.speakText(text, langOverride)
+
+      // Second language repeat (if configured)
+      if (this.config.secondLanguage && this.config.secondLanguage !== this.config.language) {
+        await this.delay(600)
+        await this.speakText(text, this.config.secondLanguage)
       }
 
-      // Small pause after chime
-      await this.delay(300)
-
-      // Speak
-      try {
-        if (this.googleTTS) {
-          await this.googleTTS.speak(text)
-        } else {
-          await this.webSpeech.speak(text, langOverride)
-        }
-      } catch {
-        // Fallback to Web Speech
-        await this.webSpeech.speak(text, langOverride)
-      }
-
-      // Inter-announcement delay
-      await this.delay(this.config.interAnnouncementDelayMs)
+      // Inter-announcement gap
+      await this.delay(this.config.interAnnouncementDelayMs ?? 1500)
     })
+  }
+
+  /**
+   * Same as announce() but marks this as a recall — prepends "Recall:" prefix.
+   */
+  announceRecall(text: string): void {
+    this.announce(`Recall. ${text}`)
   }
 
   stop(): void {
     this.queue.clear()
     this.webSpeech.stop()
     this.googleTTS?.stop()
+    this.piper?.stop()
   }
 
-  updateConfig(config: Partial<AnnouncementConfig>): void {
+  /**
+   * Update config at runtime (e.g. user changed voice/volume in settings).
+   * Rebuilds chime audio if chimeUrl changed.
+   */
+  setConfig(config: Partial<AnnouncementConfig>): void {
     this.config = { ...this.config, ...config }
-    this.webSpeech.updateConfig(config)
+    this.webSpeech.updateConfig(this.config)
+
+    // Rebuild Piper if provider or language changed
+    if (config.provider !== undefined || config.language !== undefined || config.volume !== undefined) {
+      if (this.config.provider === 'piper') {
+        const lang = this.config.language.split('-')[0].toLowerCase()
+        if (this.piper) {
+          this.piper.updateLang(lang)
+          this.piper.updateVolume(this.config.volume)
+        } else {
+          this.piper = new PiperProvider(lang, this.config.volume)
+        }
+      } else {
+        this.piper?.stop()
+        this.piper = null
+      }
+    }
+
+    if (config.chimeUrl !== undefined) {
+      if (config.chimeUrl) {
+        this.chimeAudio = new Audio(config.chimeUrl)
+        this.chimeAudio.volume = Math.max(0, Math.min(1, this.config.volume))
+      } else {
+        this.chimeAudio = null
+      }
+    }
+
+    if (config.volume !== undefined && this.chimeAudio) {
+      this.chimeAudio.volume = Math.max(0, Math.min(1, config.volume))
+    }
+  }
+
+  /** @deprecated Use setConfig() */
+  updateConfig(config: Partial<AnnouncementConfig>): void {
+    this.setConfig(config)
   }
 
   get queueLength(): number {
     return this.queue.length
   }
 
+  private async speakText(text: string, lang?: string): Promise<void> {
+    try {
+      if (this.googleTTS) {
+        await this.googleTTS.speak(text)
+      } else if (this.piper) {
+        await this.piper.speak(text)
+      } else {
+        await this.webSpeech.speak(text, lang)
+      }
+    } catch {
+      // Fallback: always try Web Speech
+      try { await this.webSpeech.speak(text, lang) } catch { /* swallow */ }
+    }
+  }
+
   private playChime(): Promise<void> {
     return new Promise((resolve) => {
-      if (!this.chimeAudio) {
-        resolve()
-        return
-      }
+      if (!this.chimeAudio) { resolve(); return }
       this.chimeAudio.currentTime = 0
       this.chimeAudio.onended = () => resolve()
       this.chimeAudio.play().catch(() => resolve())
@@ -106,30 +177,87 @@ export class AudioEngine {
 }
 
 /**
- * Build TTS announcement text from a ticket display number and window label.
- * Expands abbreviations for natural speech.
+ * Build TTS announcement text.
+ *
+ * mode:
+ *   'ticket' — queue ticket (default): "Mwenye tiketi OPD namba 21 tafadhali elekea..."
+ *   'card'   — card-based call:        "Mwenye kadi OPD namba 21 tafadhali elekea..."
+ *   'name'   — call by name:           "Nabil Hamad tafadhali elekea..."
  */
 export function buildAnnouncementText(params: {
   displayNumber: string
   windowLabel: string
-  announcementPrefix?: string
   calleeName?: string
+  announcementPrefix?: string   // legacy, ignored when language templates are used
+  language?: string
+  mode?: 'ticket' | 'card' | 'name'
 }): string {
-  const { displayNumber, windowLabel, announcementPrefix = 'Attention please,', calleeName } = params
+  const {
+    displayNumber,
+    windowLabel,
+    calleeName,
+    language = 'en',
+    mode,
+  } = params
 
-  if (calleeName) {
-    return `${announcementPrefix} ${calleeName}, please proceed to ${windowLabel}`
+  const lang = language.split('-')[0].toLowerCase()
+
+  // Determine actual mode
+  const resolvedMode: 'ticket' | 'card' | 'name' =
+    mode ?? (calleeName && !displayNumber ? 'name' : calleeName ? 'name' : 'ticket')
+
+  if (resolvedMode === 'name') {
+    return buildNameText(calleeName ?? displayNumber, windowLabel, lang)
   }
 
-  // Expand number for better TTS — "A-017" → "A, zero one seven"
+  return buildNumberText(displayNumber, windowLabel, lang, resolvedMode)
+}
+
+function buildNumberText(
+  displayNumber: string,
+  windowLabel: string,
+  lang: string,
+  mode: 'ticket' | 'card',
+): string {
   const expanded = expandTicketNumber(displayNumber)
-  return `${announcementPrefix} ${expanded}, please proceed to ${windowLabel}`
+
+  switch (lang) {
+    case 'sw':
+      return mode === 'card'
+        ? `Tangazo. Mwenye kadi, ${expanded}, tafadhali elekea ${windowLabel}.`
+        : `Tangazo. Mwenye tiketi, ${expanded}, tafadhali elekea ${windowLabel}.`
+    case 'ar':
+      return mode === 'card'
+        ? `إعلان. صاحب البطاقة رقم ${displayNumber}، يرجى التوجه إلى ${windowLabel}.`
+        : `إعلان. صاحب التذكرة رقم ${displayNumber}، يرجى التوجه إلى ${windowLabel}.`
+    case 'fr':
+      return mode === 'card'
+        ? `Annonce. Le titulaire de la carte numéro ${expanded}, veuillez vous rendre à ${windowLabel}.`
+        : `Annonce. Le titulaire du ticket numéro ${expanded}, veuillez vous rendre à ${windowLabel}.`
+    default: // en
+      return mode === 'card'
+        ? `Announcement. Card holder ${expanded}, please proceed to ${windowLabel}.`
+        : `Announcement. Ticket number ${expanded}, please proceed to ${windowLabel}.`
+  }
+}
+
+function buildNameText(name: string, windowLabel: string, lang: string): string {
+  switch (lang) {
+    case 'sw':
+      return `Tangazo. ${name}, tafadhali elekea ${windowLabel}.`
+    case 'ar':
+      return `إعلان. ${name}، يرجى التوجه إلى ${windowLabel}.`
+    case 'fr':
+      return `Annonce. ${name}, veuillez vous rendre à ${windowLabel}.`
+    default: // en
+      return `Announcement. ${name}, please proceed to ${windowLabel}.`
+  }
 }
 
 /**
  * Expand a ticket display number for natural TTS reading.
- * "OPD K 11" → "O P D, K, Eleven"
- * "A-017"    → "A, Zero One Seven"
+ * "A-017" → "A, zero one seven"
+ * "OPD-005" → "O P D, zero zero five"
  */
 export function expandTicketNumber(displayNumber: string): string {
   return displayNumber
@@ -137,14 +265,12 @@ export function expandTicketNumber(displayNumber: string): string {
     .replace(/\s+/g, ', ')
     .split(', ')
     .map((part) => {
-      // If it's all digits, spell them out
       if (/^\d+$/.test(part)) {
         return part
           .split('')
-          .map((d) => ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'][+d])
+          .map((d) => ['zero','one','two','three','four','five','six','seven','eight','nine'][+d])
           .join(' ')
       }
-      // If it's all letters, space them out for TTS (so "OPD" is read as "O P D")
       if (/^[A-Z]+$/.test(part) && part.length > 1) {
         return part.split('').join(' ')
       }

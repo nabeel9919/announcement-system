@@ -8,7 +8,9 @@
     "build": "turbo build",
     "lint": "turbo lint",
     "format": "prettier --write \"**/*.{ts,tsx,json,md}\"",
-    "clean": "turbo clean && rm -rf node_modules"
+    "clean": "turbo clean && rm -rf node_modules",
+    "download:piper": "node scripts/download-piper.mjs",
+    "download:piper:en": "node scripts/download-piper.mjs --lang en"
   },
   "devDependencies": {
     "turbo": "^2.3.0",

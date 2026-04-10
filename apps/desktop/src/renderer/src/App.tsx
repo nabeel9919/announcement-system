@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useAppStore } from './store/app'
 import SetupPage from './pages/Setup'
+import LoginPage from './pages/Login'
 import OperatorPage from './pages/Operator'
 import DisplayPage from './pages/Display'
 import DaySummaryPage from './pages/DaySummary'
@@ -25,7 +26,7 @@ export default function App() {
         } else if (window.location.hash === '#/kiosk' || window.location.hash === '#kiosk') {
           setPage('kiosk')
         } else {
-          setPage('operator')
+          setPage('login')
         }
       } else {
         setPage('setup')
@@ -53,6 +54,7 @@ export default function App() {
   }, [])
 
   if (page === 'setup') return <SetupPage />
+  if (page === 'login') return <LoginPage />
   if (page === 'expired') return <LicenseExpiredPage />
   if (page === 'display') return <DisplayPage />
   if (page === 'kiosk') return <KioskPage />

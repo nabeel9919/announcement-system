@@ -1,15 +1,22 @@
-import { app, BrowserWindow, ipcMain, shell, screen } from 'electron'
+import { app, BrowserWindow, ipcMain, shell, screen, protocol, globalShortcut } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { createOperatorWindow, createDisplayWindow, createKioskWindow, getScreenList } from './windows'
-import { setupIpcHandlers } from './ipc'
+import { setupIpcHandlers, getDb, registerVideoProtocol } from './ipc'
 import { setupPrintHandlers } from './print'
 import { checkLicense } from './license'
+import { LanServer } from './lan-server'
+
+// Register custom scheme before app is ready (required by Electron)
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'local-video', privileges: { secure: true, supportFetchAPI: true, stream: true } },
+])
 
 let operatorWindow: BrowserWindow | null = null
 /** Map of screenIndex → display BrowserWindow (supports multi-screen) */
 const displayWindows = new Map<number, BrowserWindow>()
+let lanServer: LanServer | null = null
 let kioskWindow: BrowserWindow | null = null
 
 // Legacy single-window ref kept for display:register compatibility
@@ -27,8 +34,69 @@ app.whenReady().then(async () => {
   setupIpcHandlers()
   setupPrintHandlers()
 
+  // Register local-video:// protocol for serving userData video files
+  registerVideoProtocol()
+
   // Create operator window
   operatorWindow = createOperatorWindow()
+
+  // ── Global keyboard shortcuts (work even when window is not focused) ─────────
+  // F1 = Call Next, F2 = Recall Last, F9 = Toggle Mute
+  const SHORTCUTS: Record<string, string> = {
+    F1: 'call-next',
+    F2: 'recall-last',
+    F9: 'toggle-mute',
+  }
+  for (const [key, action] of Object.entries(SHORTCUTS)) {
+    globalShortcut.register(key, () => {
+      const win = operatorWindow
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('shortcut', action)
+      }
+    })
+  }
+
+  // ── Auto HDMI / external display detection ────────────────────────────────
+  screen.on('display-added', (_event, display) => {
+    const idx = screen.getAllDisplays().findIndex((d) => d.id === display.id)
+    if (idx > 0) {
+      console.log(`[Screen] External display connected at index ${idx} — opening display window`)
+      const win = createDisplayWindow(idx)
+      displayWindows.set(idx, win)
+      win.on('closed', () => {
+        displayWindows.delete(idx)
+      })
+      // Notify operator window so the screen list refreshes
+      operatorWindow?.webContents.send('screens:changed')
+    }
+  })
+
+  screen.on('display-removed', (_event, display) => {
+    const idx = Array.from(displayWindows.keys()).find((k) => {
+      const win = displayWindows.get(k)
+      if (!win || win.isDestroyed()) return false
+      const bounds = win.getBounds()
+      return bounds.x >= display.bounds.x && bounds.x < display.bounds.x + display.bounds.width
+    })
+    if (idx !== undefined) {
+      const win = displayWindows.get(idx)
+      if (win && !win.isDestroyed()) win.close()
+      displayWindows.delete(idx)
+      operatorWindow?.webContents.send('screens:changed')
+    }
+  })
+
+  // Start LAN server — staff on other PCs open the URL in their browser
+  lanServer = new LanServer(
+    () => getDb(),
+    () => operatorWindow,
+  )
+  lanServer.start().then(() => {
+    // Register URL getter so ipc.ts can return it via lan:getUrl
+    ;(global as any).__setLanUrlGetter(() => lanServer?.getUrl() ?? null)
+  }).catch((err) => {
+    console.error('[LAN] Failed to start:', err)
+  })
 
   // Check license on startup — wait for renderer to load first
   const licenseStatus = await checkLicense()
@@ -58,6 +126,11 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll()
+  lanServer?.stop().catch(() => {})
 })
 
 function setupAutoUpdater(win: BrowserWindow) {

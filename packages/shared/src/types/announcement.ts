@@ -10,20 +10,23 @@ export type Sector =
   | 'clinic'
   | 'other'
 
-export type AudioProvider = 'web_speech' | 'google_tts' | 'elevenlabs' | 'system'
+export type AudioProvider = 'web_speech' | 'google_tts' | 'elevenlabs' | 'system' | 'piper'
 
 export interface AnnouncementConfig {
   provider: AudioProvider
   language: string           // BCP-47 e.g. "en-US", "sw-TZ", "ar-SA"
-  voiceName?: string         // specific voice name
+  /** Optional second language — announcement is repeated in this language after the primary */
+  secondLanguage?: string
+  voiceName?: string         // specific voice name for primary language
+  secondVoiceName?: string   // specific voice name for second language
   volume: number             // 0–1
   rate: number               // 0.5–2.0
   pitch: number              // 0–2
   /** Delay between queue announcements in ms */
   interAnnouncementDelayMs: number
-  /** Auto-recall after N seconds if not acknowledged */
+  /** Auto-recall after N seconds if not acknowledged (0 = disabled) */
   autoRecallAfterSeconds: number
-  /** Max number of auto-recalls before marking no_show */
+  /** Max number of auto-recalls before marking as skipped */
   maxAutoRecalls: number
   /** Optional intro chime URL (local file) */
   chimeUrl?: string

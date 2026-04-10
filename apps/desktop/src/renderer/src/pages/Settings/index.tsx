@@ -6,10 +6,12 @@ import type { QueueCategory, ServiceWindow } from '@announcement/shared'
 import { cn, generateId } from '../../lib/utils'
 import {
   ArrowLeft, Plus, Pencil, Trash2, Save, X, Loader2,
-  Building2, Monitor, Layers, Printer, Volume2, AlertTriangle, Globe
+  Building2, Monitor, Layers, Printer, Volume2, AlertTriangle, Globe, Music2,
+  Film, GripVertical, FolderOpen
 } from 'lucide-react'
+import { WebSpeechProvider, PiperProvider, buildAnnouncementText } from '@announcement/audio-engine'
 
-type Tab = 'org' | 'categories' | 'windows' | 'printer' | 'broadcast' | 'server'
+type Tab = 'org' | 'audio' | 'categories' | 'windows' | 'printer' | 'broadcast' | 'server' | 'media'
 
 const COLORS = [
   '#4F46E5', '#0EA5E9', '#10B981', '#F59E0B',
@@ -49,6 +51,21 @@ export default function SettingsPage() {
   const [winForm, setWinForm] = useState<WinForm | null>(null)
   const [winError, setWinError] = useState('')
 
+  // ── Audio settings
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([])
+  const [audioVolume, setAudioVolume] = useState<number>(config?.volume ?? 1)
+  const [audioRate, setAudioRate] = useState<number>(config?.rate ?? 0.9)
+  const [audioPitch, setAudioPitch] = useState<number>(config?.pitch ?? 1)
+  const [audioVoice, setAudioVoice] = useState<string>(config?.voiceName ?? '')
+  const [audioSecondLang, setAudioSecondLang] = useState<string>(config?.secondLanguage ?? '')
+  const [audioRecallSec, setAudioRecallSec] = useState<number>(config?.autoRecallAfterSeconds ?? 90)
+  const [audioMaxRecalls, setAudioMaxRecalls] = useState<number>(config?.maxAutoRecalls ?? 2)
+  const [audioProvider, setAudioProvider] = useState<string>((config as any)?.provider ?? 'web_speech')
+  const [piperAvailable, setPiperAvailable] = useState<boolean | null>(null)
+  const [audioSaving, setAudioSaving] = useState(false)
+  const [audioSaved, setAudioSaved] = useState(false)
+  const [testingAudio, setTestingAudio] = useState(false)
+
   // ── Printer
   const [printers, setPrinters] = useState<{ name: string; isDefault: boolean }[]>([])
   const [loadingPrinters, setLoadingPrinters] = useState(false)
@@ -64,8 +81,12 @@ export default function SettingsPage() {
   const [serverTestResult, setServerTestResult] = useState<'ok' | 'fail' | null>(null)
   const [serverTesting, setServerTesting] = useState(false)
 
+  // ── Media / Videos
+  const [videos, setVideos] = useState<{ name: string; fileUrl: string; size: number }[]>([])
+  const [videosDir, setVideosDir] = useState('')
+  const [videoAdding, setVideoAdding] = useState(false)
+
   useEffect(() => {
-    // Load fresh data
     Promise.all([
       window.api.categories.list(),
       window.api.windows.list(),
@@ -75,6 +96,13 @@ export default function SettingsPage() {
       setWindows(wins as ServiceWindow[])
       setServerUrl(url as string)
     })
+    // Load voices for audio tab
+    WebSpeechProvider.getVoices().then(setVoices)
+    // Check Piper availability
+    PiperProvider.isAvailable('sw').then(setPiperAvailable)
+    // Load video playlist
+    window.api.videos.list().then(setVideos)
+    window.api.videos.getDir().then(setVideosDir)
   }, [])
 
   // ── Save org settings
@@ -156,6 +184,48 @@ export default function SettingsPage() {
     setWinForm(null)
   }
 
+  // ── Audio
+  async function saveAudio() {
+    setAudioSaving(true)
+    const updated = {
+      ...(config as any),
+      provider: audioProvider,
+      volume: audioVolume,
+      rate: audioRate,
+      pitch: audioPitch,
+      voiceName: audioVoice || undefined,
+      secondLanguage: audioSecondLang || undefined,
+      autoRecallAfterSeconds: audioRecallSec,
+      maxAutoRecalls: audioMaxRecalls,
+    }
+    await window.api.config.write({ isSetupComplete: true, installationConfig: updated })
+    setConfig(updated)
+    setAudioSaving(false)
+    setAudioSaved(true)
+    setTimeout(() => setAudioSaved(false), 2500)
+  }
+
+  function testAudio() {
+    setTestingAudio(true)
+    const text = buildAnnouncementText({
+      displayNumber: 'A-001',
+      windowLabel: 'Window 1',
+      language: config?.language === 'sw' ? 'sw-TZ' : config?.language === 'ar' ? 'ar-SA' : config?.language === 'fr' ? 'fr-FR' : 'en-US',
+    })
+    const utt = new SpeechSynthesisUtterance(text)
+    utt.volume = audioVolume
+    utt.rate = audioRate
+    utt.pitch = audioPitch
+    if (audioVoice) {
+      const v = window.speechSynthesis.getVoices().find((v) => v.name === audioVoice)
+      if (v) utt.voice = v
+    }
+    utt.onend = () => setTestingAudio(false)
+    utt.onerror = () => setTestingAudio(false)
+    window.speechSynthesis.cancel()
+    window.speechSynthesis.speak(utt)
+  }
+
   // ── Printer
   async function loadPrinters() {
     setLoadingPrinters(true)
@@ -212,6 +282,8 @@ export default function SettingsPage() {
 
   const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
     { id: 'org', label: 'Organization', icon: Building2 },
+    { id: 'audio', label: 'Audio', icon: Music2 },
+    { id: 'media', label: 'Media', icon: Film },
     { id: 'categories', label: 'Categories', icon: Layers },
     { id: 'windows', label: 'Windows', icon: Monitor },
     { id: 'printer', label: 'Printer', icon: Printer },
@@ -284,6 +356,260 @@ export default function SettingsPage() {
                 {saved ? 'Saved!' : 'Save Changes'}
               </button>
             </div>
+          </div>
+        )}
+
+        {/* ── Audio ─────────────────────────────────────────────────── */}
+        {tab === 'audio' && (
+          <div className="max-w-lg">
+            <h1 className="text-xl font-bold text-zinc-100 mb-1">Audio &amp; Announcements</h1>
+            <p className="text-sm text-zinc-500 mb-6">Controls voice, volume, speed, and auto-recall behaviour.</p>
+
+            <div className="space-y-6">
+
+              {/* TTS Provider */}
+              <div>
+                <label className="block text-sm font-medium text-zinc-300 mb-2">TTS Engine</label>
+                <div className="grid grid-cols-2 gap-3">
+                  {/* Web Speech */}
+                  <button
+                    onClick={() => setAudioProvider('web_speech')}
+                    className={cn(
+                      'rounded-xl border p-3 text-left transition-all',
+                      audioProvider === 'web_speech'
+                        ? 'border-primary-500 bg-primary-500/10 ring-1 ring-primary-500/40'
+                        : 'border-zinc-700 bg-zinc-800/40 hover:border-zinc-600'
+                    )}
+                  >
+                    <div className="text-sm font-semibold text-zinc-100 mb-0.5">Web Speech</div>
+                    <div className="text-xs text-zinc-500">Uses OS voices. Install Windows Swahili language pack for Zuri voice.</div>
+                    <div className="mt-2 text-xs font-medium text-green-400">Always available</div>
+                  </button>
+
+                  {/* Piper */}
+                  <button
+                    onClick={() => setAudioProvider('piper')}
+                    className={cn(
+                      'rounded-xl border p-3 text-left transition-all',
+                      audioProvider === 'piper'
+                        ? 'border-primary-500 bg-primary-500/10 ring-1 ring-primary-500/40'
+                        : 'border-zinc-700 bg-zinc-800/40 hover:border-zinc-600'
+                    )}
+                  >
+                    <div className="text-sm font-semibold text-zinc-100 mb-0.5">Piper TTS</div>
+                    <div className="text-xs text-zinc-500">Bundled neural voice. Best Swahili quality, no setup for clients.</div>
+                    <div className={cn('mt-2 text-xs font-medium', piperAvailable === null ? 'text-zinc-500' : piperAvailable ? 'text-green-400' : 'text-amber-400')}>
+                      {piperAvailable === null ? 'Checking…' : piperAvailable ? 'Ready' : 'Model not yet downloaded'}
+                    </div>
+                  </button>
+                </div>
+                {audioProvider === 'piper' && !piperAvailable && (
+                  <p className="text-xs text-amber-400/80 mt-2">
+                    Run <code className="bg-zinc-800 px-1 py-0.5 rounded text-amber-300">node scripts/download-piper.mjs</code> from the project root to download the model (~75 MB).
+                  </p>
+                )}
+              </div>
+
+              {/* Voice picker — only shown for Web Speech */}
+              {audioProvider === 'web_speech' && <div>
+                <label className="block text-sm font-medium text-zinc-300 mb-1.5">Voice</label>
+                <select
+                  value={audioVoice}
+                  onChange={(e) => setAudioVoice(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3.5 py-2.5 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                >
+                  <option value="">— System default for selected language —</option>
+                  {voices.map((v) => (
+                    <option key={v.name} value={v.name}>
+                      {v.name} ({v.lang})
+                    </option>
+                  ))}
+                </select>
+                {voices.length === 0 && (
+                  <p className="text-xs text-zinc-600 mt-1">No voices detected — your OS may need TTS voices installed.</p>
+                )}
+              </div>}
+
+              {/* Second language */}
+              <div>
+                <label className="block text-sm font-medium text-zinc-300 mb-1.5">
+                  Second Language <span className="text-zinc-500 font-normal">(repeat each announcement in)</span>
+                </label>
+                <select
+                  value={audioSecondLang}
+                  onChange={(e) => setAudioSecondLang(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3.5 py-2.5 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                >
+                  <option value="">— None (single language) —</option>
+                  <option value="en-US">English</option>
+                  <option value="sw-TZ">Swahili</option>
+                  <option value="ar-SA">Arabic</option>
+                  <option value="fr-FR">French</option>
+                </select>
+              </div>
+
+              {/* Volume */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-sm font-medium text-zinc-300">Volume</label>
+                  <span className="text-xs text-zinc-400 tabular-nums">{Math.round(audioVolume * 100)}%</span>
+                </div>
+                <input type="range" min={0} max={1} step={0.05} value={audioVolume}
+                  onChange={(e) => setAudioVolume(parseFloat(e.target.value))}
+                  className="w-full accent-primary-500" />
+              </div>
+
+              {/* Rate */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-sm font-medium text-zinc-300">Speed</label>
+                  <span className="text-xs text-zinc-400 tabular-nums">{audioRate.toFixed(2)}×</span>
+                </div>
+                <input type="range" min={0.5} max={1.5} step={0.05} value={audioRate}
+                  onChange={(e) => setAudioRate(parseFloat(e.target.value))}
+                  className="w-full accent-primary-500" />
+                <div className="flex justify-between text-xs text-zinc-600 mt-1">
+                  <span>Slower</span><span>Normal</span><span>Faster</span>
+                </div>
+              </div>
+
+              {/* Pitch */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-sm font-medium text-zinc-300">Pitch</label>
+                  <span className="text-xs text-zinc-400 tabular-nums">{audioPitch.toFixed(1)}</span>
+                </div>
+                <input type="range" min={0.5} max={1.5} step={0.1} value={audioPitch}
+                  onChange={(e) => setAudioPitch(parseFloat(e.target.value))}
+                  className="w-full accent-primary-500" />
+                <div className="flex justify-between text-xs text-zinc-600 mt-1">
+                  <span>Lower</span><span>Normal</span><span>Higher</span>
+                </div>
+              </div>
+
+              {/* Auto-recall */}
+              <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 space-y-4">
+                <p className="text-sm font-semibold text-zinc-200">Auto-recall Settings</p>
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-sm text-zinc-300">Recall after</label>
+                    <span className="text-xs text-zinc-400 tabular-nums">
+                      {audioRecallSec === 0 ? 'Disabled' : `${audioRecallSec}s`}
+                    </span>
+                  </div>
+                  <input type="range" min={0} max={300} step={15} value={audioRecallSec}
+                    onChange={(e) => setAudioRecallSec(parseInt(e.target.value))}
+                    className="w-full accent-primary-500" />
+                  <p className="text-xs text-zinc-600 mt-1">
+                    {audioRecallSec === 0
+                      ? 'Auto-recall disabled — operator must recall manually'
+                      : `If patient hasn't responded after ${audioRecallSec}s, announcement repeats automatically`}
+                  </p>
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-sm text-zinc-300">Max auto-recalls</label>
+                    <span className="text-xs text-zinc-400 tabular-nums">{audioMaxRecalls}×</span>
+                  </div>
+                  <input type="range" min={1} max={5} step={1} value={audioMaxRecalls}
+                    onChange={(e) => setAudioMaxRecalls(parseInt(e.target.value))}
+                    className="w-full accent-primary-500" />
+                  <p className="text-xs text-zinc-600 mt-1">
+                    After {audioMaxRecalls} auto-recall{audioMaxRecalls !== 1 ? 's' : ''}, ticket is marked as skipped
+                  </p>
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex items-center gap-3 pt-1">
+                <button onClick={saveAudio} disabled={audioSaving}
+                  className="flex items-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-500 disabled:opacity-50 px-5 py-2.5 text-sm font-semibold text-white transition-colors">
+                  {audioSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {audioSaved ? 'Saved!' : 'Save Audio Settings'}
+                </button>
+                <button onClick={testAudio} disabled={testingAudio}
+                  className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800/50 hover:bg-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-300 transition-colors">
+                  {testingAudio ? <Loader2 className="w-4 h-4 animate-spin" /> : <Volume2 className="w-4 h-4" />}
+                  Test Voice
+                </button>
+              </div>
+
+            </div>
+          </div>
+        )}
+
+        {/* ── Media ─────────────────────────────────────────────────── */}
+        {tab === 'media' && (
+          <div className="max-w-xl">
+            <h1 className="text-xl font-bold text-zinc-100 mb-1">Media Playlist</h1>
+            <p className="text-sm text-zinc-500 mb-6">
+              Videos loop on display TVs. Ticket announcements appear as a lower-third overlay without interrupting playback.
+            </p>
+
+            {/* Add button */}
+            <div className="flex items-center gap-3 mb-6">
+              <button
+                onClick={async () => {
+                  setVideoAdding(true)
+                  const result = await window.api.videos.add()
+                  if (result) setVideos(result)
+                  setVideoAdding(false)
+                }}
+                disabled={videoAdding}
+                className="flex items-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-500 disabled:opacity-50 px-4 py-2.5 text-sm font-semibold text-white transition-colors"
+              >
+                {videoAdding ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                Add Video
+              </button>
+              {videosDir && (
+                <button
+                  onClick={() => window.api.openExternal(`file://${videosDir}`)}
+                  className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800/50 hover:bg-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-300 transition-colors"
+                >
+                  <FolderOpen className="w-4 h-4" />
+                  Open Folder
+                </button>
+              )}
+            </div>
+
+            {/* Playlist */}
+            {videos.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-zinc-700 bg-zinc-900/30 p-12 text-center">
+                <Film className="w-10 h-10 text-zinc-700 mx-auto mb-3" />
+                <p className="text-zinc-500 text-sm font-medium mb-1">No videos yet</p>
+                <p className="text-zinc-600 text-xs">Add .mp4, .webm, or .mov files. They will loop on your display TVs.</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {videos.map((video, i) => (
+                  <div key={video.name}
+                    className="flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900/40 px-4 py-3">
+                    <GripVertical className="w-4 h-4 text-zinc-600 flex-shrink-0" />
+                    <div className="w-8 h-8 rounded-lg bg-primary-600/20 border border-primary-600/30 flex items-center justify-center flex-shrink-0">
+                      <span className="text-primary-400 text-xs font-bold">{i + 1}</span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-zinc-200 truncate">{video.name}</p>
+                      <p className="text-xs text-zinc-600">{(video.size / 1_048_576).toFixed(1)} MB</p>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        if (!confirm(`Remove "${video.name}" from playlist?`)) return
+                        const result = await window.api.videos.delete(video.name)
+                        setVideos(result)
+                      }}
+                      className="p-1.5 rounded-lg text-zinc-600 hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <p className="text-xs text-zinc-600 mt-4">
+              Supported formats: MP4, WebM, MOV, MKV, AVI. Videos play in order and loop automatically.
+            </p>
           </div>
         )}
 

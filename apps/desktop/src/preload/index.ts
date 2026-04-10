@@ -11,6 +11,8 @@ const api = {
     write: (config: Record<string, unknown>) => ipcRenderer.invoke('config:write', config),
     setServerUrl: (url: string) => ipcRenderer.invoke('config:setServerUrl', url),
     getServerUrl: () => ipcRenderer.invoke('config:getServerUrl'),
+    verifyPin: (pin: string): Promise<boolean> => ipcRenderer.invoke('config:verifyPin', pin),
+    setPin: (pin: string): Promise<boolean> => ipcRenderer.invoke('config:setPin', pin),
   },
 
   // ─── Tickets ───────────────────────────────────────────────────────────
@@ -95,9 +97,53 @@ const api = {
     close: () => ipcRenderer.invoke('kiosk:close'),
   },
 
+  // ─── LAN server ────────────────────────────────────────────────────────
+  lan: {
+    /** Returns the LAN URL (e.g. http://192.168.1.5:4000) or null if not started */
+    getUrl: (): Promise<string | null> => ipcRenderer.invoke('lan:getUrl'),
+    /** Called when a remote operator triggers an announcement via LAN */
+    onAnnounce: (cb: (data: { text: string; displayNumber: string }) => void) => {
+      ipcRenderer.on('lan:announce', (_e, data) => cb(data))
+    },
+  },
+
+  // ─── Piper TTS ─────────────────────────────────────────────────────────
+  piper: {
+    /** Check if Piper binary + model are present for the given language */
+    status: (lang?: string): Promise<{ available: boolean; binPath: string; modelPath: string | null }> =>
+      ipcRenderer.invoke('piper:status', lang ?? 'sw'),
+    /** Synthesize text — returns base64-encoded WAV string */
+    synthesize: (text: string, lang?: string): Promise<string> =>
+      ipcRenderer.invoke('piper:synthesize', text, lang ?? 'sw'),
+  },
+
+  // ─── Videos ────────────────────────────────────────────────────────────
+  videos: {
+    list: (): Promise<{ name: string; filePath: string; fileUrl: string; size: number; order: number }[]> =>
+      ipcRenderer.invoke('videos:list'),
+    add: (): Promise<{ name: string; filePath: string; fileUrl: string; size: number; order: number }[] | null> =>
+      ipcRenderer.invoke('videos:add'),
+    delete: (name: string): Promise<{ name: string; filePath: string; fileUrl: string; size: number; order: number }[]> =>
+      ipcRenderer.invoke('videos:delete', name),
+    reorder: (orderedNames: string[]): Promise<{ name: string; filePath: string; fileUrl: string; size: number; order: number }[]> =>
+      ipcRenderer.invoke('videos:reorder', orderedNames),
+    getDir: (): Promise<string> => ipcRenderer.invoke('videos:getDir'),
+  },
+
+  // ─── Global keyboard shortcuts ─────────────────────────────────────────────
+  /** Fired when the user presses a global shortcut (F1/F2/F9) even when window is unfocused */
+  onShortcut: (cb: (action: 'call-next' | 'recall-last' | 'toggle-mute') => void) => {
+    ipcRenderer.on('shortcut', (_e, action) => cb(action))
+  },
+
   // ─── Navigation ────────────────────────────────────────────────────────
   onNavigate: (cb: (route: string) => void) => {
     ipcRenderer.on('navigate', (_e, route) => cb(route))
+  },
+
+  // ─── Screen change notification ────────────────────────────────────────
+  onScreensChanged: (cb: () => void) => {
+    ipcRenderer.on('screens:changed', () => cb())
   },
 
   // ─── Shell ─────────────────────────────────────────────────────────────

@@ -17,6 +17,9 @@ apps/desktop/out/
 apps/desktop/dist/
 apps/desktop/release/
 
+# Piper TTS — binary + model files (large binaries, download via: pnpm download:piper)
+apps/desktop/resources/piper/
+
 # Environment
 .env
 .env.local
