@@ -78,7 +78,7 @@ export default function DaySummaryPage() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-zinc-950 text-zinc-50 p-8 overflow-y-auto">
+    <div className="flex flex-col h-screen bg-[#0a0a0f] text-zinc-50 p-8 overflow-y-auto">
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div className="flex items-center gap-3">

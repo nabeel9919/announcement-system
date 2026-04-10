@@ -71,7 +71,7 @@ export default function AnalyticsPage() {
   const currentHour = new Date().getHours()
 
   return (
-    <div className="flex flex-col h-screen bg-zinc-950 text-zinc-50 overflow-hidden">
+    <div className="flex flex-col h-screen bg-[#0a0a0f] text-zinc-50 overflow-hidden">
 
       {/* Header */}
       <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-800 flex-shrink-0">

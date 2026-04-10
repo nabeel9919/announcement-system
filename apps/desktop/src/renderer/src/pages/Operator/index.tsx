@@ -10,7 +10,7 @@ import {
   RefreshCw, Bell, ChevronDown, Plus, Mic, CreditCard, Printer, Tablet,
   Settings, BarChart2, Download, ArrowUpCircle, Wifi, Lock, Unlock,
   Shield, X, ChevronRight, Activity, Clock, Users, CheckCircle2,
-  AlertCircle, Zap, Hash, Film
+  AlertCircle, Zap, Hash, Film, UserX
 } from 'lucide-react'
 
 // ── Admin PIN modal ──────────────────────────────────────────────────────────
@@ -109,7 +109,7 @@ function StatCard({ label, value, color, icon: Icon }: {
 
 // ── Main component ───────────────────────────────────────────────────────────
 export default function OperatorPage() {
-  const { config, setPage, updateAvailable, updateDownloaded, operatorWindowId } = useAppStore()
+  const { config, setPage, updateAvailable, updateDownloaded, operatorWindowId, setSettingsInitialTab, activeUser, setActiveUser } = useAppStore()
   const {
     tickets, windows, categories,
     setTickets, setWindows, setCategories, setStats, stats,
@@ -127,8 +127,12 @@ export default function OperatorPage() {
   const [time, setTime] = useState(new Date())
   const [lastCallFlash, setLastCallFlash] = useState(false)
 
-  // Admin state
-  const [isAdmin, setIsAdmin] = useState(false)
+  // Role-based access — derive from activeUser if present, fall back to legacy PIN
+  const userRole = activeUser?.role ?? null
+  const isSupervisor = userRole === 'supervisor' || userRole === 'admin'
+  const isAdmin = userRole === 'admin'
+
+  // Legacy PIN modal (kept for installs that haven't migrated to RBAC yet)
   const [showPinModal, setShowPinModal] = useState(false)
   const [pendingAdminAction, setPendingAdminAction] = useState<(() => void) | null>(null)
   const adminTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -142,19 +146,22 @@ export default function OperatorPage() {
     return () => clearInterval(t)
   }, [])
 
-  // Admin auto-lock after 3 minutes of inactivity
-  function resetAdminTimer() {
+  // Legacy PIN auto-lock (only relevant when using PIN fallback, not RBAC login)
+  useEffect(() => {
     if (adminTimerRef.current) clearTimeout(adminTimerRef.current)
-    if (isAdmin) {
-      adminTimerRef.current = setTimeout(() => setIsAdmin(false), 3 * 60 * 1000)
-    }
-  }
-  useEffect(() => { resetAdminTimer() }, [isAdmin])
+  }, [isAdmin])
 
   function requireAdmin(action: () => void) {
+    // If logged in via RBAC and is admin, allow immediately
     if (isAdmin) { action(); return }
+    // Fall back to PIN modal for legacy/unauthenticated access
     setPendingAdminAction(() => action)
     setShowPinModal(true)
+  }
+
+  function requireSupervisor(action: () => void) {
+    if (isSupervisor) { action(); return }
+    requireAdmin(action)
   }
 
   // Init audio engine
@@ -406,6 +413,12 @@ export default function OperatorPage() {
     refreshStats()
   }
 
+  async function markNoShow(ticketId: string) {
+    await window.api.tickets.noShow(ticketId)
+    updateTicket(ticketId, { status: 'no_show' })
+    refreshStats()
+  }
+
   async function refreshStats() {
     const s = await window.api.stats.today()
     setStats(s as any)
@@ -455,7 +468,7 @@ export default function OperatorPage() {
 
   if (isLoading) {
     return (
-      <div className="flex h-screen items-center justify-center bg-zinc-950 flex-col gap-3">
+      <div className="flex h-screen items-center justify-center bg-[#0a0a0f] flex-col gap-3">
         <div className="w-8 h-8 rounded-full border-2 border-primary-500 border-t-transparent animate-spin" />
         <p className="text-sm text-zinc-500">Loading system…</p>
       </div>
@@ -558,20 +571,44 @@ export default function OperatorPage() {
           <span className="hidden sm:inline">{isMuted ? 'Muted' : 'Audio'}</span>
         </button>
 
-        {/* Admin toggle */}
-        <button
-          onClick={() => isAdmin ? setIsAdmin(false) : requireAdmin(() => {})}
-          title={isAdmin ? 'Admin mode active — click to lock' : 'Enter admin mode'}
-          className={cn(
-            'flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all border',
-            isAdmin
-              ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
-              : 'border-zinc-700 bg-zinc-800/50 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
-          )}
-        >
-          {isAdmin ? <Unlock className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
-          <span className="hidden sm:inline">{isAdmin ? 'Admin' : 'Locked'}</span>
-        </button>
+        {/* Role badge / user info */}
+        {activeUser ? (
+          <div className="flex items-center gap-2">
+            <div className={cn(
+              'flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold border',
+              isAdmin
+                ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                : isSupervisor
+                  ? 'bg-blue-500/15 text-blue-400 border-blue-500/30'
+                  : 'bg-zinc-800/50 text-zinc-400 border-zinc-700'
+            )}>
+              <Shield className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline capitalize">{activeUser.role}</span>
+            </div>
+            <button
+              onClick={() => { setActiveUser(null); setPage('login') }}
+              title="Sign out"
+              className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs border border-zinc-700 bg-zinc-800/50 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+            >
+              <X className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Sign out</span>
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => requireAdmin(() => {})}
+            title={isAdmin ? 'Admin mode active' : 'Enter admin mode (PIN)'}
+            className={cn(
+              'flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all border',
+              isAdmin
+                ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                : 'border-zinc-700 bg-zinc-800/50 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
+            )}
+          >
+            {isAdmin ? <Unlock className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
+            <span className="hidden sm:inline">{isAdmin ? 'Admin' : 'Locked'}</span>
+          </button>
+        )}
       </header>
 
       {/* ══ BODY ══════════════════════════════════════════════════════════════ */}
@@ -658,6 +695,22 @@ export default function OperatorPage() {
 
           {/* Navigation */}
           <div className="p-3 space-y-1 mt-auto">
+            {/* Current user chip */}
+            {activeUser && (
+              <div className="flex items-center gap-2 px-2 py-2 mb-1 rounded-lg bg-zinc-800/40 border border-zinc-800">
+                <div className={cn(
+                  'w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0',
+                  isAdmin ? 'bg-amber-500/20 text-amber-400' : isSupervisor ? 'bg-blue-500/20 text-blue-400' : 'bg-zinc-700 text-zinc-400'
+                )}>
+                  {activeUser.displayName.slice(0, 1).toUpperCase()}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-zinc-300 truncate">{activeUser.displayName}</p>
+                  <p className="text-[10px] text-zinc-600 capitalize">{activeUser.role}</p>
+                </div>
+              </div>
+            )}
+
             <button
               onClick={() => window.api.kiosk.open(0)}
               className="w-full flex items-center gap-2.5 rounded-lg border border-zinc-700/60 bg-zinc-800/30 hover:bg-zinc-800/60 px-3 py-2 text-xs text-zinc-300 transition-colors"
@@ -665,16 +718,23 @@ export default function OperatorPage() {
               <Tablet className="w-3.5 h-3.5 text-zinc-500" />Kiosk
             </button>
             <button
-              onClick={() => setPage('analytics')}
-              className="w-full flex items-center gap-2.5 rounded-lg border border-zinc-700/60 bg-zinc-800/30 hover:bg-zinc-800/60 px-3 py-2 text-xs text-zinc-300 transition-colors"
+              onClick={() => requireSupervisor(() => setPage('analytics'))}
+              className={cn(
+                'w-full flex items-center gap-2.5 rounded-lg border px-3 py-2 text-xs transition-colors',
+                isSupervisor
+                  ? 'border-zinc-700/60 bg-zinc-800/30 hover:bg-zinc-800/60 text-zinc-300'
+                  : 'border-zinc-700/60 bg-zinc-800/30 hover:bg-zinc-800/60 text-zinc-300'
+              )}
             >
               <BarChart2 className="w-3.5 h-3.5 text-zinc-500" />Analytics
+              {!isSupervisor && <Lock className="w-2.5 h-2.5 text-zinc-600 ml-auto" />}
             </button>
             <button
-              onClick={() => setPage('summary')}
+              onClick={() => requireSupervisor(() => setPage('summary'))}
               className="w-full flex items-center gap-2.5 rounded-lg border border-zinc-700/60 bg-zinc-800/30 hover:bg-zinc-800/60 px-3 py-2 text-xs text-zinc-300 transition-colors"
             >
               <RefreshCw className="w-3.5 h-3.5 text-zinc-500" />End of Day
+              {!isSupervisor && <Lock className="w-2.5 h-2.5 text-zinc-600 ml-auto" />}
             </button>
             <button
               onClick={() => requireAdmin(() => setPage('settings'))}
@@ -689,7 +749,7 @@ export default function OperatorPage() {
               {!isAdmin && <Lock className="w-2.5 h-2.5 text-zinc-600 ml-auto" />}
             </button>
             <button
-              onClick={() => requireAdmin(() => setPage('settings'))}
+              onClick={() => requireAdmin(() => { setSettingsInitialTab('media'); setPage('settings') })}
               className={cn(
                 'w-full flex items-center gap-2.5 rounded-lg border px-3 py-2 text-xs transition-colors',
                 isAdmin
@@ -955,6 +1015,13 @@ export default function OperatorPage() {
                               className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-emerald-400 hover:bg-emerald-400/10 border border-emerald-500/20 hover:border-emerald-500/40 transition-all"
                             >
                               <Check className="w-3 h-3" />
+                            </button>
+                            <button
+                              onClick={() => markNoShow(t.id)}
+                              title="No show"
+                              className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-rose-400 hover:bg-rose-400/10 border border-rose-500/20 hover:border-rose-500/40 transition-all"
+                            >
+                              <UserX className="w-3 h-3" />
                             </button>
                             <button
                               onClick={() => markSkipped(t.id)}

@@ -23,6 +23,7 @@ const api = {
     recall: (ticketId: string) => ipcRenderer.invoke('tickets:recall', ticketId),
     serve: (ticketId: string) => ipcRenderer.invoke('tickets:serve', ticketId),
     skip: (ticketId: string) => ipcRenderer.invoke('tickets:skip', ticketId),
+    noShow: (ticketId: string) => ipcRenderer.invoke('tickets:noShow', ticketId),
     nextSequence: (categoryId: string) => ipcRenderer.invoke('tickets:nextSequence', categoryId),
     resetDay: () => ipcRenderer.invoke('tickets:resetDay'),
   },
@@ -42,6 +43,30 @@ const api = {
   // ─── Stats ─────────────────────────────────────────────────────────────
   stats: {
     today: () => ipcRenderer.invoke('stats:today'),
+    waitTime: (categoryId?: string): Promise<{
+      waitingAhead: number
+      avgServiceSeconds: number
+      estimatedWaitSeconds: number
+      estimatedWaitMinutes: number
+    }> => ipcRenderer.invoke('stats:waitTime', categoryId),
+  },
+
+  // ─── Audit log ─────────────────────────────────────────────────────────
+  audit: {
+    recent: (limit?: number): Promise<Record<string, unknown>[]> => ipcRenderer.invoke('audit:recent', limit),
+  },
+
+  // ─── Users / RBAC ──────────────────────────────────────────────────────
+  users: {
+    login: (username: string, password: string): Promise<Record<string, unknown> | null> =>
+      ipcRenderer.invoke('users:login', username, password),
+    list: (): Promise<Record<string, unknown>[]> => ipcRenderer.invoke('users:list'),
+    upsert: (user: Record<string, unknown>): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('users:upsert', user),
+    delete: (userId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('users:delete', userId),
+    changePassword: (userId: string, oldPassword: string, newPassword: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke('users:changePassword', userId, oldPassword, newPassword),
   },
 
   // ─── Display Window ────────────────────────────────────────────────────

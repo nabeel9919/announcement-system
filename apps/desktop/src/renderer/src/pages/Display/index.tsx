@@ -202,7 +202,7 @@ export default function DisplayPage() {
   const noVideos = videos.length === 0
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-zinc-950 select-none">
+    <div className="relative w-screen h-screen overflow-hidden bg-[#0a0a0f] select-none">
 
       {/* ══ BACKGROUND VIDEO ══════════════════════════════════════════════════ */}
       {!noVideos ? (
@@ -216,7 +216,7 @@ export default function DisplayPage() {
         />
       ) : (
         /* Fallback: dark gradient when no videos loaded */
-        <div className="absolute inset-0 bg-gradient-to-br from-zinc-950 via-zinc-900 to-zinc-950" />
+        <div className="absolute inset-0 bg-gradient-to-br from-[#0a0a0f] via-zinc-900 to-[#0a0a0f]" />
       )}
 
       {/* ══ DARK SCRIM — keeps text readable over any video ════════════════ */}
@@ -349,9 +349,9 @@ export default function DisplayPage() {
               </div>
 
               {/* Window */}
-              <div className="text-right flex-shrink-0">
+              <div className="text-right flex-shrink-0 max-w-[200px]">
                 <p className="text-white/50 text-xs uppercase tracking-widest mb-1">Proceed to</p>
-                <p className="text-primary-300 font-bold text-xl leading-tight">{activeCall.windowLabel}</p>
+                <p className="text-primary-300 font-bold text-xl leading-tight truncate">{activeCall.windowLabel}</p>
               </div>
             </div>
           </div>
@@ -368,7 +368,7 @@ export default function DisplayPage() {
                  style={{ fontSize: 'clamp(5rem, 15vw, 12rem)', letterSpacing: '0.04em' }}>
                 {recentCalls[0].displayNumber}
               </p>
-              <p className="text-primary-400 text-2xl font-semibold mt-4">{recentCalls[0].windowLabel}</p>
+              <p className="text-primary-400 text-2xl font-semibold mt-4 truncate max-w-xs mx-auto">{recentCalls[0].windowLabel}</p>
             </div>
           ) : (
             <div className="opacity-20 text-center">

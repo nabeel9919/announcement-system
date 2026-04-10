@@ -7,6 +7,7 @@ import { setupIpcHandlers, getDb, registerVideoProtocol } from './ipc'
 import { setupPrintHandlers } from './print'
 import { checkLicense } from './license'
 import { LanServer } from './lan-server'
+import { scheduleDbBackup } from './db-backup'
 
 // Register custom scheme before app is ready (required by Electron)
 protocol.registerSchemesAsPrivileged([
@@ -33,6 +34,9 @@ app.whenReady().then(async () => {
   // Register all IPC handlers
   setupIpcHandlers()
   setupPrintHandlers()
+
+  // Schedule automatic daily DB backup (runs once now + every midnight)
+  scheduleDbBackup()
 
   // Register local-video:// protocol for serving userData video files
   registerVideoProtocol()

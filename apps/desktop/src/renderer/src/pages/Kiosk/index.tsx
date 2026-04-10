@@ -16,6 +16,8 @@ export default function KioskPage() {
   const [categoryColor, setCategoryColor] = useState('#4F46E5')
   const [countdown, setCountdown] = useState(RESET_SECONDS)
   const [time, setTime] = useState(new Date())
+  const [estimatedWaitMinutes, setEstimatedWaitMinutes] = useState<number | null>(null)
+  const [waitingAhead, setWaitingAhead] = useState<number>(0)
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const lang = config?.language ?? 'en'
@@ -62,6 +64,13 @@ export default function KioskPage() {
     setCategoryColor(cat.color)
 
     try {
+      // Fetch wait time BEFORE creating ticket so count is correct (this ticket not yet in queue)
+      const waitInfo = await window.api.stats.waitTime(cat.id).catch(() => null)
+      const ahead = waitInfo?.waitingAhead ?? 0
+      const waitMins = waitInfo ? Math.ceil((ahead * waitInfo.avgServiceSeconds) / 60) : null
+      setWaitingAhead(ahead)
+      setEstimatedWaitMinutes(waitMins)
+
       const seq = await window.api.tickets.nextSequence(cat.id)
       const displayNumber = `${cat.prefix}${padNumber(seq)}`
       const ticket = {
@@ -82,13 +91,15 @@ export default function KioskPage() {
         createdAt: ticket.createdAt,
       })
 
-      // Auto-print
+      // Auto-print (include wait time on receipt)
       window.api.print.ticket({
         displayNumber: ticket.displayNumber,
         categoryLabel: cat.label,
         organizationName: config?.organizationName ?? 'Announcement System',
         issuedAt: ticket.createdAt,
         windowCount: config?.windowCount ?? 1,
+        waitingAhead: ahead,
+        estimatedWaitMinutes: waitMins ?? undefined,
       }).then((r) => console.log('[print] result:', r)).catch((e) => console.error('[print] error:', e))
 
       setTicketNumber(displayNumber)
@@ -100,7 +111,7 @@ export default function KioskPage() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-zinc-950 text-white overflow-hidden select-none cursor-default">
+    <div className="flex flex-col h-screen bg-[#0a0a0f] text-white overflow-hidden select-none cursor-default">
 
       {/* Header */}
       <header className="flex items-center justify-between px-10 py-5 border-b border-zinc-800/60 flex-shrink-0">
@@ -191,7 +202,29 @@ export default function KioskPage() {
               </p>
             </div>
 
-            <p className="text-zinc-400 text-xl mb-8">{t.pleaseWait}</p>
+            <p className="text-zinc-400 text-xl mb-4">{t.pleaseWait}</p>
+
+            {/* Wait time estimate */}
+            {estimatedWaitMinutes !== null && (
+              <div className="flex items-center gap-6 mb-8">
+                <div className="text-center">
+                  <p className="text-4xl font-extrabold tabular-nums text-zinc-100">{waitingAhead}</p>
+                  <p className="text-xs text-zinc-500 mt-1 uppercase tracking-wide">
+                    {lang === 'sw' ? 'mbele yako' : 'ahead of you'}
+                  </p>
+                </div>
+                <div className="w-px h-10 bg-zinc-800" />
+                <div className="text-center">
+                  <p className="text-4xl font-extrabold tabular-nums text-amber-400">
+                    ~{estimatedWaitMinutes < 1 ? '<1' : estimatedWaitMinutes}
+                    <span className="text-xl font-normal text-zinc-500 ml-1">min</span>
+                  </p>
+                  <p className="text-xs text-zinc-500 mt-1 uppercase tracking-wide">
+                    {lang === 'sw' ? 'muda wa kusubiri' : 'est. wait'}
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* Countdown bar */}
             <div className="flex flex-col items-center gap-3">

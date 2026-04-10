@@ -33,7 +33,7 @@ export default function LicenseExpiredPage() {
   }
 
   return (
-    <div className="flex h-screen bg-zinc-950 text-zinc-50 items-center justify-center p-8">
+    <div className="flex h-screen bg-[#0a0a0f] text-zinc-50 items-center justify-center p-8">
       <div className="w-full max-w-md text-center">
         {/* Icon */}
         <div className="w-20 h-20 rounded-full bg-red-600/20 border-2 border-red-500/40 flex items-center justify-center mx-auto mb-6">

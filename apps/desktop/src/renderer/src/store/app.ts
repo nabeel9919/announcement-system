@@ -1,7 +1,15 @@
 import { create } from 'zustand'
-import type { InstallationConfig, CallingMode, Sector, SupportedLanguage } from '@announcement/shared'
+import type { InstallationConfig, CallingMode, Sector, SupportedLanguage, UserRole } from '@announcement/shared'
 
 type AppPage = 'setup' | 'login' | 'operator' | 'display' | 'summary' | 'kiosk' | 'settings' | 'analytics' | 'expired'
+
+export interface ActiveUser {
+  id: string
+  username: string
+  displayName: string
+  role: UserRole
+  windowId?: string
+}
 
 interface AppStore {
   page: AppPage
@@ -12,6 +20,9 @@ interface AppStore {
   updateDownloaded: boolean
   operatorName: string
   operatorWindowId: string
+  settingsInitialTab: string | null
+  /** Currently logged-in user (null = not logged in / legacy PIN mode) */
+  activeUser: ActiveUser | null
 
   setPage: (page: AppPage) => void
   setConfig: (config: InstallationConfig) => void
@@ -20,6 +31,8 @@ interface AppStore {
   setUpdateAvailable: (v: boolean) => void
   setUpdateDownloaded: (v: boolean) => void
   setOperatorSession: (name: string, windowId: string) => void
+  setSettingsInitialTab: (tab: string | null) => void
+  setActiveUser: (user: ActiveUser | null) => void
 }
 
 export const useAppStore = create<AppStore>((set) => ({
@@ -31,6 +44,8 @@ export const useAppStore = create<AppStore>((set) => ({
   updateDownloaded: false,
   operatorName: '',
   operatorWindowId: '',
+  settingsInitialTab: null,
+  activeUser: null,
 
   setPage: (page) => set({ page }),
   setConfig: (config) => set({ config }),
@@ -39,4 +54,6 @@ export const useAppStore = create<AppStore>((set) => ({
   setUpdateAvailable: (updateAvailable) => set({ updateAvailable }),
   setUpdateDownloaded: (updateDownloaded) => set({ updateDownloaded }),
   setOperatorSession: (operatorName, operatorWindowId) => set({ operatorName, operatorWindowId }),
+  setSettingsInitialTab: (settingsInitialTab) => set({ settingsInitialTab }),
+  setActiveUser: (activeUser) => set({ activeUser }),
 }))

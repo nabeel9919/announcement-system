@@ -7,11 +7,12 @@ import { cn, generateId } from '../../lib/utils'
 import {
   ArrowLeft, Plus, Pencil, Trash2, Save, X, Loader2,
   Building2, Monitor, Layers, Printer, Volume2, AlertTriangle, Globe, Music2,
-  Film, GripVertical, FolderOpen
+  Film, GripVertical, FolderOpen, Users, Eye, EyeOff, ShieldCheck
 } from 'lucide-react'
 import { WebSpeechProvider, PiperProvider, buildAnnouncementText } from '@announcement/audio-engine'
+import type { UserRole, SystemUser } from '@announcement/shared'
 
-type Tab = 'org' | 'audio' | 'categories' | 'windows' | 'printer' | 'broadcast' | 'server' | 'media'
+type Tab = 'org' | 'audio' | 'categories' | 'windows' | 'printer' | 'broadcast' | 'server' | 'media' | 'users'
 
 const COLORS = [
   '#4F46E5', '#0EA5E9', '#10B981', '#F59E0B',
@@ -32,10 +33,15 @@ const emptyWin = (number: number): WinForm => ({ id: generateId(), number, label
 // ─── Main component ─────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
-  const { config, setConfig, setPage } = useAppStore()
+  const { config, setConfig, setPage, settingsInitialTab, setSettingsInitialTab } = useAppStore()
   const { categories, windows, setCategories, setWindows } = useQueueStore()
 
-  const [tab, setTab] = useState<Tab>('org')
+  const [tab, setTab] = useState<Tab>((settingsInitialTab as Tab) ?? 'org')
+
+  useEffect(() => {
+    if (settingsInitialTab) setSettingsInitialTab(null)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
@@ -286,13 +292,14 @@ export default function SettingsPage() {
     { id: 'media', label: 'Media', icon: Film },
     { id: 'categories', label: 'Categories', icon: Layers },
     { id: 'windows', label: 'Windows', icon: Monitor },
+    { id: 'users', label: 'Staff & Roles', icon: Users },
     { id: 'printer', label: 'Printer', icon: Printer },
     { id: 'broadcast', label: 'Emergency', icon: AlertTriangle },
     { id: 'server', label: 'Server', icon: Globe },
   ]
 
   return (
-    <div className="flex h-screen bg-zinc-950 text-zinc-50">
+    <div className="flex h-screen bg-[#0a0a0f] text-zinc-50">
       {/* Sidebar */}
       <aside className="w-56 border-r border-zinc-800 bg-zinc-900/50 flex flex-col">
         <div className="p-4 border-b border-zinc-800 flex items-center gap-2">
@@ -937,7 +944,241 @@ export default function SettingsPage() {
           </div>
         )}
 
+        {/* ── Staff & Roles ─────────────────────────────────────────────────── */}
+        {tab === 'users' && <UsersTab />}
+
       </div>
+    </div>
+  )
+}
+
+// ─── Users / RBAC Tab ────────────────────────────────────────────────────────
+
+interface UserForm {
+  id: string
+  username: string
+  displayName: string
+  role: UserRole
+  password: string
+  windowId: string
+}
+
+function emptyUserForm(): UserForm {
+  return { id: crypto.randomUUID(), username: '', displayName: '', role: 'operator', password: '', windowId: '' }
+}
+
+function UsersTab() {
+  const [users, setUsers] = useState<SystemUser[]>([])
+  const [form, setForm] = useState<UserForm | null>(null)
+  const [error, setError] = useState('')
+  const [showPass, setShowPass] = useState(false)
+  const [windows, setWindows] = useState<{ id: string; label: string }[]>([])
+
+  useEffect(() => {
+    window.api.users.list().then((u) => setUsers(u as unknown as SystemUser[]))
+    window.api.windows.list().then((w) => setWindows(w as any[]))
+  }, [])
+
+  async function save() {
+    if (!form) return
+    if (!form.username.trim()) { setError('Username is required'); return }
+    if (!form.displayName.trim()) { setError('Display name is required'); return }
+    const isNew = !users.some((u) => u.id === form.id)
+    if (isNew && !form.password) { setError('Password is required for new users'); return }
+    setError('')
+    await window.api.users.upsert({
+      id: form.id,
+      username: form.username.trim(),
+      displayName: form.displayName.trim(),
+      role: form.role,
+      password: form.password || undefined,
+      windowId: form.windowId || undefined,
+      isActive: true,
+    })
+    const updated = await window.api.users.list()
+    setUsers(updated as unknown as SystemUser[])
+    setForm(null)
+  }
+
+  async function deactivate(userId: string) {
+    if (!confirm('Deactivate this user? They will not be able to sign in.')) return
+    await window.api.users.delete(userId)
+    setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, isActive: false } : u))
+  }
+
+  const ROLE_COLORS: Record<UserRole, string> = {
+    admin: 'text-amber-400 bg-amber-500/10 border-amber-500/30',
+    supervisor: 'text-blue-400 bg-blue-500/10 border-blue-500/30',
+    operator: 'text-zinc-400 bg-zinc-700/30 border-zinc-700',
+  }
+
+  return (
+    <div className="space-y-6 max-w-2xl">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-zinc-100">Staff & Roles</h2>
+          <p className="text-sm text-zinc-500 mt-1">Manage who can access the system and what they can do.</p>
+        </div>
+        <button
+          onClick={() => { setError(''); setForm(emptyUserForm()) }}
+          className="flex items-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors"
+        >
+          <Plus className="w-4 h-4" />Add User
+        </button>
+      </div>
+
+      {/* Role legend */}
+      <div className="grid grid-cols-3 gap-3">
+        {([
+          { role: 'operator' as UserRole, desc: 'Call, serve, recall tickets' },
+          { role: 'supervisor' as UserRole, desc: '+ Analytics, broadcast, end-of-day' },
+          { role: 'admin' as UserRole, desc: '+ Settings, users, day reset' },
+        ]).map(({ role, desc }) => (
+          <div key={role} className={cn('rounded-xl border p-3', ROLE_COLORS[role])}>
+            <div className="flex items-center gap-1.5 mb-1">
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span className="text-xs font-semibold capitalize">{role}</span>
+            </div>
+            <p className="text-[11px] opacity-70">{desc}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* User list */}
+      <div className="space-y-2">
+        {users.map((u) => (
+          <div key={u.id} className={cn('flex items-center gap-4 rounded-xl border bg-zinc-900/40 px-4 py-3', u.isActive ? 'border-zinc-800' : 'border-zinc-800/50 opacity-50')}>
+            <div className={cn('w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0', ROLE_COLORS[u.role])}>
+              {u.displayName.slice(0, 1).toUpperCase()}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-semibold text-zinc-100">{u.displayName}</p>
+                <span className={cn('text-[10px] font-semibold px-2 py-0.5 rounded-full border capitalize', ROLE_COLORS[u.role])}>
+                  {u.role}
+                </span>
+                {!u.isActive && <span className="text-[10px] text-zinc-600 border border-zinc-700 px-2 py-0.5 rounded-full">Inactive</span>}
+              </div>
+              <p className="text-xs text-zinc-500 mt-0.5">@{u.username}</p>
+            </div>
+            <div className="flex gap-1">
+              <button
+                onClick={() => {
+                  setError('')
+                  setForm({ id: u.id, username: u.username, displayName: u.displayName, role: u.role, password: '', windowId: u.windowId ?? '' })
+                }}
+                className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition-colors"
+                title="Edit"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+              {u.isActive && (
+                <button
+                  onClick={() => deactivate(u.id)}
+                  className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-red-400 transition-colors"
+                  title="Deactivate"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+        {users.length === 0 && (
+          <p className="text-sm text-zinc-600 text-center py-8">No users yet — add your first staff member above.</p>
+        )}
+      </div>
+
+      {/* User form modal */}
+      {form && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl border border-zinc-700 bg-zinc-900 p-6 shadow-2xl space-y-4 mx-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold text-zinc-100">
+                {users.some((u) => u.id === form.id) ? 'Edit User' : 'New User'}
+              </h3>
+              <button onClick={() => setForm(null)} className="p-1 rounded-lg hover:bg-zinc-800 text-zinc-500">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1">Display Name</label>
+                <input
+                  value={form.displayName}
+                  onChange={(e) => setForm({ ...form, displayName: e.target.value })}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  placeholder="e.g. John Mwangi"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1">Username</label>
+                <input
+                  value={form.username}
+                  onChange={(e) => setForm({ ...form, username: e.target.value.toLowerCase().replace(/\s/g, '') })}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 font-mono focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  placeholder="e.g. john"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1">
+                  Password {users.some((u) => u.id === form.id) && <span className="normal-case text-zinc-600">(leave blank to keep current)</span>}
+                </label>
+                <div className="relative">
+                  <input
+                    type={showPass ? 'text' : 'password'}
+                    value={form.password}
+                    onChange={(e) => setForm({ ...form, password: e.target.value })}
+                    className="w-full rounded-lg border border-zinc-700 bg-zinc-800 pl-3 pr-9 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                    placeholder="••••••••"
+                  />
+                  <button type="button" onClick={() => setShowPass((v) => !v)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400" tabIndex={-1}>
+                    {showPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1">Role</label>
+                <select
+                  value={form.role}
+                  onChange={(e) => setForm({ ...form, role: e.target.value as UserRole })}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                >
+                  <option value="operator">Operator — call & serve tickets</option>
+                  <option value="supervisor">Supervisor — + analytics & broadcast</option>
+                  <option value="admin">Admin — full access</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1">Default Window <span className="normal-case text-zinc-600">(optional)</span></label>
+                <select
+                  value={form.windowId}
+                  onChange={(e) => setForm({ ...form, windowId: e.target.value })}
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                >
+                  <option value="">— None —</option>
+                  {windows.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
+                </select>
+              </div>
+            </div>
+
+            {error && (
+              <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{error}</p>
+            )}
+
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => setForm(null)} className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-700 transition-colors">
+                Cancel
+              </button>
+              <button onClick={save} className="flex-1 rounded-lg bg-primary-600 hover:bg-primary-500 px-4 py-2 text-sm font-semibold text-white transition-colors">
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

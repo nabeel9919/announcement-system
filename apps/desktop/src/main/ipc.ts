@@ -1,10 +1,12 @@
 import { ipcMain, app, protocol, net } from 'electron'
 import Database from 'better-sqlite3'
+import { createHash } from 'crypto'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { readLocalConfig, writeLocalConfig } from './license'
 import { isPiperAvailable, synthesizeWithPiper, getPiperBin, getPiperModel } from './piper-synth'
 import { listVideos, addVideo, deleteVideo, reorderVideos, getVideosDir } from './video-manager'
+import type { UserRole } from '@announcement/shared'
 
 let db: Database.Database | null = null
 
@@ -60,10 +62,64 @@ function initSchema(db: Database.Database): void {
       type TEXT NOT NULL DEFAULT 'initial'
     );
 
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      username TEXT NOT NULL UNIQUE,
+      display_name TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'operator',
+      window_id TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      last_login_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id TEXT PRIMARY KEY,
+      timestamp TEXT NOT NULL,
+      event TEXT NOT NULL,
+      ticket_id TEXT,
+      display_number TEXT,
+      window_id TEXT,
+      window_label TEXT,
+      operator_name TEXT,
+      category_id TEXT,
+      notes TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
     CREATE INDEX IF NOT EXISTS idx_tickets_category ON tickets(category_id);
     CREATE INDEX IF NOT EXISTS idx_call_log_date ON call_log(called_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(timestamp);
   `)
+}
+
+function logAuditEvent(
+  db: Database.Database,
+  event: string,
+  ticketId?: string | null,
+  displayNumber?: string | null,
+  windowId?: string | null,
+  categoryId?: string | null,
+  notes?: string | null,
+): void {
+  const windowLabel = windowId
+    ? (db.prepare('SELECT label FROM windows WHERE id = ?').get(windowId) as any)?.label ?? null
+    : null
+  db.prepare(`
+    INSERT INTO audit_log (id, timestamp, event, ticket_id, display_number, window_id, window_label, category_id, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    crypto.randomUUID(),
+    new Date().toISOString(),
+    event,
+    ticketId ?? null,
+    displayNumber ?? null,
+    windowId ?? null,
+    windowLabel,
+    categoryId ?? null,
+    notes ?? null,
+  )
 }
 
 export function setupIpcHandlers(): void {
@@ -183,12 +239,14 @@ export function setupIpcHandlers(): void {
       created_at: ticket.createdAt ?? new Date().toISOString(),
       callee_name: ticket.calleeName ?? null,
     })
+    logAuditEvent(db, 'ticket_issued', ticket.id as string, ticket.displayNumber as string, null, ticket.categoryId as string)
     return ticket
   })
 
   ipcMain.handle('tickets:call', (_event, ticketId: string, windowId: string) => {
     const db = getDb()
     const now = new Date().toISOString()
+    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId) as any
     db.prepare(`
       UPDATE tickets SET status = 'called', called_at = ?, window_id = ?, recall_count = recall_count + 1
       WHERE id = ?
@@ -198,6 +256,7 @@ export function setupIpcHandlers(): void {
       INSERT INTO call_log (id, ticket_id, window_id, called_at, type)
       VALUES (?, ?, ?, ?, ?)
     `).run(crypto.randomUUID(), ticketId, windowId, now, 'initial')
+    logAuditEvent(db, 'ticket_called', ticketId, ticket?.display_number, windowId, ticket?.category_id)
     return { success: true }
   })
 
@@ -211,24 +270,40 @@ export function setupIpcHandlers(): void {
       INSERT INTO call_log (id, ticket_id, window_id, called_at, type)
       VALUES (?, ?, ?, ?, 'recall')
     `).run(crypto.randomUUID(), ticketId, ticket.window_id, now)
+    logAuditEvent(db, 'ticket_recalled', ticketId, ticket.display_number, ticket.window_id, ticket.category_id)
     return { success: true }
   })
 
   ipcMain.handle('tickets:serve', (_event, ticketId: string) => {
     const db = getDb()
+    const now = new Date().toISOString()
     db.prepare(`
       UPDATE tickets SET status = 'served', served_at = ? WHERE id = ?
-    `).run(new Date().toISOString(), ticketId)
+    `).run(now, ticketId)
     const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId) as any
     if (ticket?.window_id) {
       db.prepare(`UPDATE windows SET current_ticket_id = NULL WHERE id = ?`).run(ticket.window_id)
     }
+    logAuditEvent(db, 'ticket_served', ticketId, ticket?.display_number, ticket?.window_id, ticket?.category_id)
     return { success: true }
   })
 
   ipcMain.handle('tickets:skip', (_event, ticketId: string) => {
     const db = getDb()
+    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId) as any
     db.prepare(`UPDATE tickets SET status = 'skipped' WHERE id = ?`).run(ticketId)
+    logAuditEvent(db, 'ticket_skipped', ticketId, ticket?.display_number, ticket?.window_id, ticket?.category_id)
+    return { success: true }
+  })
+
+  ipcMain.handle('tickets:noShow', (_event, ticketId: string) => {
+    const db = getDb()
+    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId) as any
+    db.prepare(`UPDATE tickets SET status = 'no_show' WHERE id = ?`).run(ticketId)
+    if (ticket?.window_id) {
+      db.prepare(`UPDATE windows SET current_ticket_id = NULL WHERE id = ?`).run(ticket.window_id)
+    }
+    logAuditEvent(db, 'ticket_no_show', ticketId, ticket?.display_number, ticket?.window_id, ticket?.category_id)
     return { success: true }
   })
 
@@ -243,6 +318,7 @@ export function setupIpcHandlers(): void {
 
   ipcMain.handle('tickets:resetDay', () => {
     const db = getDb()
+    logAuditEvent(db, 'day_reset')
     db.prepare(`DELETE FROM tickets`).run()
     db.prepare(`UPDATE windows SET current_ticket_id = NULL`).run()
     return { success: true }
@@ -302,12 +378,150 @@ export function setupIpcHandlers(): void {
   ipcMain.handle('stats:today', () => {
     const db = getDb()
     const today = new Date().toISOString().slice(0, 10)
+    const q = (status: string) =>
+      (db.prepare(`SELECT COUNT(*) as c FROM tickets WHERE status = ? AND created_at LIKE ?`).get(status, `${today}%`) as any).c
     return {
-      waiting: (db.prepare(`SELECT COUNT(*) as c FROM tickets WHERE status = 'waiting' AND created_at LIKE ?`).get(`${today}%`) as any).c,
-      called: (db.prepare(`SELECT COUNT(*) as c FROM tickets WHERE status = 'called' AND created_at LIKE ?`).get(`${today}%`) as any).c,
-      served: (db.prepare(`SELECT COUNT(*) as c FROM tickets WHERE status = 'served' AND created_at LIKE ?`).get(`${today}%`) as any).c,
-      skipped: (db.prepare(`SELECT COUNT(*) as c FROM tickets WHERE status = 'skipped' AND created_at LIKE ?`).get(`${today}%`) as any).c,
+      waiting: q('waiting'),
+      called: q('called'),
+      served: q('served'),
+      skipped: q('skipped'),
+      noShow: q('no_show'),
     }
+  })
+
+  ipcMain.handle('stats:waitTime', (_event, categoryId?: string) => {
+    const db = getDb()
+    const today = new Date().toISOString().slice(0, 10)
+
+    // Waiting tickets ahead (all waiting tickets today, filtered by category if given)
+    const waitingCount = categoryId
+      ? (db.prepare(`SELECT COUNT(*) as c FROM tickets WHERE status = 'waiting' AND category_id = ? AND created_at LIKE ?`).get(categoryId, `${today}%`) as any).c
+      : (db.prepare(`SELECT COUNT(*) as c FROM tickets WHERE status = 'waiting' AND created_at LIKE ?`).get(`${today}%`) as any).c
+
+    // Average service time from today's completed tickets (created → served)
+    let avgSeconds: number | null = null
+    const catAvg = categoryId
+      ? (db.prepare(`SELECT AVG((julianday(served_at) - julianday(created_at)) * 86400) as s FROM tickets WHERE status = 'served' AND category_id = ? AND created_at LIKE ? AND served_at IS NOT NULL`).get(categoryId, `${today}%`) as any)?.s
+      : null
+    if (catAvg) {
+      avgSeconds = catAvg
+    } else {
+      // Fall back to overall average across all categories today
+      const overallAvg = (db.prepare(`SELECT AVG((julianday(served_at) - julianday(created_at)) * 86400) as s FROM tickets WHERE status = 'served' AND created_at LIKE ? AND served_at IS NOT NULL`).get(`${today}%`) as any)?.s
+      avgSeconds = overallAvg ?? null
+    }
+
+    const DEFAULT_SERVICE_SECONDS = 5 * 60 // 5 min fallback when no history yet
+    const serviceTime = avgSeconds ?? DEFAULT_SERVICE_SECONDS
+    const estimatedWaitSeconds = Math.round(waitingCount * serviceTime)
+
+    return {
+      waitingAhead: waitingCount,
+      avgServiceSeconds: Math.round(serviceTime),
+      estimatedWaitSeconds,
+      estimatedWaitMinutes: Math.ceil(estimatedWaitSeconds / 60),
+    }
+  })
+
+  ipcMain.handle('audit:recent', (_event, limit = 100) => {
+    const db = getDb()
+    return db.prepare(`SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ?`).all(limit)
+  })
+
+  // ─── Users / RBAC ────────────────────────────────────────────────────────
+
+  function hashPassword(password: string): string {
+    return createHash('sha256').update(password).digest('hex')
+  }
+
+  function mapUser(row: any) {
+    return {
+      id: row.id,
+      username: row.username,
+      displayName: row.display_name,
+      role: row.role as UserRole,
+      windowId: row.window_id ?? undefined,
+      isActive: row.is_active === 1,
+      createdAt: row.created_at,
+      lastLoginAt: row.last_login_at ?? undefined,
+    }
+  }
+
+  /** Seed a default admin account on first run if no users exist */
+  function seedDefaultAdmin(db: Database.Database): void {
+    const count = (db.prepare('SELECT COUNT(*) as c FROM users').get() as any).c
+    if (count === 0) {
+      db.prepare(`
+        INSERT INTO users (id, username, display_name, password_hash, role, is_active, created_at)
+        VALUES (?, 'admin', 'Administrator', ?, 'admin', 1, ?)
+      `).run(crypto.randomUUID(), hashPassword('admin1234'), new Date().toISOString())
+      console.log('[RBAC] Default admin seeded — username: admin, password: admin1234')
+    }
+  }
+  seedDefaultAdmin(getDb())
+
+  /** Authenticate user — returns user object (without hash) or null */
+  ipcMain.handle('users:login', (_event, username: string, password: string) => {
+    const db = getDb()
+    const row = db.prepare(`SELECT * FROM users WHERE username = ? AND is_active = 1`).get(username) as any
+    if (!row || row.password_hash !== hashPassword(password)) return null
+    db.prepare(`UPDATE users SET last_login_at = ? WHERE id = ?`).run(new Date().toISOString(), row.id)
+    logAuditEvent(db, 'user_login', null, null, null, null, `user:${row.username} role:${row.role}`)
+    return mapUser(row)
+  })
+
+  ipcMain.handle('users:list', () => {
+    const db = getDb()
+    return (db.prepare(`SELECT * FROM users ORDER BY display_name ASC`).all() as any[]).map(mapUser)
+  })
+
+  ipcMain.handle('users:upsert', (_event, user: Record<string, unknown>) => {
+    const db = getDb()
+    const existing = db.prepare('SELECT id FROM users WHERE id = ?').get(user.id) as any
+    if (existing) {
+      // Update — only update password if provided
+      if (user.password) {
+        db.prepare(`
+          UPDATE users SET username = ?, display_name = ?, password_hash = ?, role = ?, window_id = ?, is_active = ?
+          WHERE id = ?
+        `).run(user.username, user.displayName, hashPassword(user.password as string), user.role, user.windowId ?? null, user.isActive ? 1 : 0, user.id)
+      } else {
+        db.prepare(`
+          UPDATE users SET username = ?, display_name = ?, role = ?, window_id = ?, is_active = ?
+          WHERE id = ?
+        `).run(user.username, user.displayName, user.role, user.windowId ?? null, user.isActive ? 1 : 0, user.id)
+      }
+    } else {
+      db.prepare(`
+        INSERT INTO users (id, username, display_name, password_hash, role, window_id, is_active, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+      `).run(
+        user.id,
+        user.username,
+        user.displayName,
+        hashPassword((user.password as string) ?? 'changeme'),
+        user.role,
+        user.windowId ?? null,
+        new Date().toISOString(),
+      )
+    }
+    return { success: true }
+  })
+
+  ipcMain.handle('users:delete', (_event, userId: string) => {
+    const db = getDb()
+    // Soft-delete: deactivate rather than remove
+    db.prepare(`UPDATE users SET is_active = 0 WHERE id = ?`).run(userId)
+    return { success: true }
+  })
+
+  ipcMain.handle('users:changePassword', (_event, userId: string, oldPassword: string, newPassword: string) => {
+    const db = getDb()
+    const row = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as any
+    if (!row) return { success: false, error: 'User not found' }
+    if (row.password_hash !== hashPassword(oldPassword)) return { success: false, error: 'Incorrect current password' }
+    db.prepare(`UPDATE users SET password_hash = ? WHERE id = ?`).run(hashPassword(newPassword), userId)
+    return { success: true }
   })
 
   // ─── LAN server ───────────────────────────────────────────────────────────
