@@ -8,7 +8,7 @@ import * as os from 'os'
 import { randomUUID } from 'crypto'
 import type { BrowserWindow } from 'electron'
 import type Database from 'better-sqlite3'
-import { readLocalConfig } from './license'
+import { readLocalConfig, writeLocalConfig } from './license'
 
 type GetDb = () => Database.Database
 type GetWindow = () => BrowserWindow | null
@@ -21,17 +21,6 @@ function getLocalIp(): string {
     }
   }
   return '127.0.0.1'
-}
-
-function json(res: http.ServerResponse, status: number, data: unknown) {
-  const body = JSON.stringify(data)
-  res.writeHead(status, {
-    'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-  })
-  res.end(body)
 }
 
 function readBody(req: http.IncomingMessage): Promise<unknown> {
@@ -92,6 +81,14 @@ export class LanServer {
   private getDb: GetDb
   private getOperatorWindow: GetWindow
 
+  // ── Security ─────────────────────────────────────────────────────────────
+  private apiToken: string = ''
+  /** ip → { failures, windowStart } */
+  private rateLimiter = new Map<string, { failures: number; windowStart: number }>()
+  private readonly RATE_MAX = 10
+  private readonly RATE_WINDOW_MS = 5 * 60 * 1000   // 5 min sliding window
+  private readonly RATE_BLOCK_MS  = 15 * 60 * 1000  // 15 min block after max failures
+
   constructor(getDb: GetDb, getOperatorWindow: GetWindow, port = 4000) {
     this.getDb = getDb
     this.getOperatorWindow = getOperatorWindow
@@ -103,9 +100,75 @@ export class LanServer {
     return `http://${getLocalIp()}:${this.actualPort}`
   }
 
+  getToken(): string { return this.apiToken }
   getPort(): number { return this.actualPort ?? this.port }
 
+  // ── Token persistence ────────────────────────────────────────────────────
+  private initToken(): void {
+    const config = readLocalConfig() as any
+    if (config.lanApiToken && typeof config.lanApiToken === 'string' && config.lanApiToken.length >= 32) {
+      this.apiToken = config.lanApiToken
+    } else {
+      // Generate a 40-character hex token
+      this.apiToken = Array.from({ length: 5 }, () => randomUUID().replace(/-/g, '')).join('').slice(0, 40)
+      writeLocalConfig({ lanApiToken: this.apiToken } as any)
+      console.log('[LAN] New API token generated and saved.')
+    }
+    console.log(`[LAN] API token: ${this.apiToken.slice(0, 8)}…${this.apiToken.slice(-4)}`)
+  }
+
+  // ── Rate limiter helpers ─────────────────────────────────────────────────
+  private getIp(req: http.IncomingMessage): string {
+    const forwarded = req.headers['x-forwarded-for']
+    if (typeof forwarded === 'string') return forwarded.split(',')[0].trim()
+    return req.socket.remoteAddress ?? 'unknown'
+  }
+
+  private checkRateLimit(ip: string): boolean {
+    const entry = this.rateLimiter.get(ip)
+    if (!entry) return false
+    if (Date.now() - entry.windowStart > this.RATE_BLOCK_MS) {
+      this.rateLimiter.delete(ip)
+      return false
+    }
+    return entry.failures >= this.RATE_MAX
+  }
+
+  private recordFailure(ip: string): void {
+    const now = Date.now()
+    const entry = this.rateLimiter.get(ip)
+    if (!entry || now - entry.windowStart > this.RATE_WINDOW_MS) {
+      this.rateLimiter.set(ip, { failures: 1, windowStart: now })
+    } else {
+      entry.failures++
+    }
+  }
+
+  private clearFailures(ip: string): void {
+    this.rateLimiter.delete(ip)
+  }
+
+  // ── Auth check ───────────────────────────────────────────────────────────
+  private checkAuth(req: http.IncomingMessage): boolean {
+    const auth = req.headers['authorization'] ?? ''
+    return auth === `Bearer ${this.apiToken}`
+  }
+
+  // ── CORS origin validation ───────────────────────────────────────────────
+  private isLocalOrigin(origin: string | undefined): boolean {
+    if (!origin) return true  // no Origin header = same-origin or curl — allow
+    try {
+      const host = new URL(origin).hostname
+      if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true
+      if (/^192\.168\./.test(host)) return true
+      if (/^10\./.test(host)) return true
+      if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true
+    } catch { /* malformed origin — deny */ }
+    return false
+  }
+
   start(): Promise<void> {
+    this.initToken()
     return new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => this.handle(req, res))
 
@@ -170,40 +233,80 @@ export class LanServer {
   }
 
   private async handle(req: http.IncomingMessage, res: http.ServerResponse) {
-    const url = new URL(req.url ?? '/', `http://localhost`)
+    const url    = new URL(req.url ?? '/', `http://localhost`)
     const method = req.method ?? 'GET'
-    const path = url.pathname
+    const path   = url.pathname
+    const ip     = this.getIp(req)
+    const origin = req.headers['origin'] as string | undefined
+    // Allow local-network origins; reflect the origin back so cookies work
+    const allowOrigin = this.isLocalOrigin(origin) ? (origin ?? '*') : 'null'
 
-    // CORS preflight
+    // ── Rate-limit check ────────────────────────────────────────────────────
+    if (this.checkRateLimit(ip)) {
+      res.writeHead(429, {
+        'Content-Type': 'application/json',
+        'Retry-After': String(Math.ceil(this.RATE_BLOCK_MS / 1000)),
+      })
+      res.end(JSON.stringify({ error: 'Too many failed attempts. Try again in 15 minutes.' }))
+      return
+    }
+
+    // ── Reply helper — attaches correct CORS headers every time ────────────
+    const reply = (status: number, data: unknown) => {
+      const body = JSON.stringify(data)
+      res.writeHead(status, {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': allowOrigin,
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      })
+      res.end(body)
+    }
+
+    // ── CORS preflight ───────────────────────────────────────────────────────
     if (method === 'OPTIONS') {
       res.writeHead(204, {
-        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Origin': allowOrigin,
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Access-Control-Max-Age': '86400',
       })
       res.end()
       return
     }
 
-    // SSE endpoint
+    // ── Bearer-token check for ALL write endpoints ───────────────────────────
+    if (method === 'POST') {
+      if (!this.checkAuth(req)) {
+        this.recordFailure(ip)
+        reply(401, { error: 'Unauthorized. Include "Authorization: Bearer <token>" header.' })
+        return
+      }
+      this.clearFailures(ip)
+    }
+
+    // ── SSE — token passed as query param (EventSource can't set headers) ──
     if (method === 'GET' && path === '/api/events') {
+      const token = url.searchParams.get('token')
+      if (token !== this.apiToken) {
+        this.recordFailure(ip)
+        res.writeHead(401, { 'Content-Type': 'text/plain' })
+        res.end('Unauthorized')
+        return
+      }
+      this.clearFailures(ip)
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
-        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Origin': allowOrigin,
       })
       res.write(`event: ping\ndata: {}\n\n`)
       this.sseClients.add(res)
-
-      // Send initial state
       const { tickets, windows, categories } = this.getQueue()
       res.write(`event: queue\ndata: ${JSON.stringify({ tickets, windows, categories })}\n\n`)
       res.write(`event: stats\ndata: ${JSON.stringify(this.getStats())}\n\n`)
-
       req.socket.on('close', () => this.sseClients.delete(res))
-
-      // Keep-alive ping every 25s
       const ping = setInterval(() => {
         try { res.write(`event: ping\ndata: {}\n\n`) }
         catch { clearInterval(ping); this.sseClients.delete(res) }
@@ -212,163 +315,150 @@ export class LanServer {
       return
     }
 
-    // GET /api/queue
+    // ── GET /api/queue ───────────────────────────────────────────────────────
     if (method === 'GET' && path === '/api/queue') {
-      json(res, 200, this.getQueue())
+      reply(200, this.getQueue())
       return
     }
 
-    // GET /api/stats
+    // ── GET /api/stats ───────────────────────────────────────────────────────
     if (method === 'GET' && path === '/api/stats') {
-      json(res, 200, this.getStats())
+      reply(200, this.getStats())
       return
     }
 
-    // GET /api/config
+    // ── GET /api/config ──────────────────────────────────────────────────────
     if (method === 'GET' && path === '/api/config') {
       const db = this.getDb()
       const categories = db.prepare('SELECT * FROM categories ORDER BY code ASC').all()
-      const windows = db.prepare('SELECT * FROM windows ORDER BY number ASC').all()
-      json(res, 200, { categories, windows })
+      const windows    = db.prepare('SELECT * FROM windows ORDER BY number ASC').all()
+      reply(200, { categories, windows })
       return
     }
 
-    // POST /api/call-name  (call a person by name, no ticket)
+    // ── POST /api/call-name ──────────────────────────────────────────────────
     if (method === 'POST' && path === '/api/call-name') {
       const body = await readBody(req) as { name: string; windowId?: string }
-      if (!body.name) { json(res, 400, { error: 'name required' }); return }
+      if (!body.name) { reply(400, { error: 'name required' }); return }
       try {
         const win = body.windowId ? (this.getDb().prepare('SELECT * FROM windows WHERE id=?').get(body.windowId) as any) : null
-        const windowLabel = win?.label ?? 'Reception'
-        this.triggerAnnounce(body.name, windowLabel, body.windowId ?? '', 'name')
+        this.triggerAnnounce(body.name, win?.label ?? 'Reception', body.windowId ?? '', 'name')
         this.broadcastSSE('announce', { name: body.name, windowId: body.windowId ?? '' })
-        json(res, 200, { success: true })
-      } catch (e) { json(res, 500, { error: String(e) }) }
+        reply(200, { success: true })
+      } catch (e) { reply(500, { error: String(e) }) }
       return
     }
 
-    // POST /api/tickets/issue  (reception creates a new ticket)
+    // ── POST /api/tickets/issue ──────────────────────────────────────────────
     if (method === 'POST' && path === '/api/tickets/issue') {
       const body = await readBody(req) as { categoryId: string }
-      if (!body.categoryId) { json(res, 400, { error: 'categoryId required' }); return }
+      if (!body.categoryId) { reply(400, { error: 'categoryId required' }); return }
       try {
-        const db = this.getDb()
+        const db  = this.getDb()
         const cat = db.prepare('SELECT * FROM categories WHERE id=?').get(body.categoryId) as any
-        if (!cat) { json(res, 404, { error: 'Category not found' }); return }
-        const today = new Date().toISOString().slice(0, 10)
+        if (!cat) { reply(404, { error: 'Category not found' }); return }
+        const today  = new Date().toISOString().slice(0, 10)
         const maxRow = db.prepare(
           `SELECT MAX(sequence_number) as m FROM tickets WHERE category_id=? AND created_at LIKE ?`
         ).get(body.categoryId, `${today}%`) as { m: number | null }
-        const seq = (maxRow.m ?? 0) + 1
-        const pad = (n: number) => String(n).padStart(3, '0')
+        const seq           = (maxRow.m ?? 0) + 1
+        const pad           = (n: number) => String(n).padStart(3, '0')
         const displayNumber = `${cat.prefix ?? ''}${pad(seq)}`
-        const id = randomUUID()
-        const now = new Date().toISOString()
-        db.prepare(`
-          INSERT INTO tickets (id, display_number, sequence_number, category_id, status, created_at, recall_count)
-          VALUES (?,?,?,?,'waiting',?,0)
-        `).run(id, displayNumber, seq, body.categoryId, now)
+        const id            = randomUUID()
+        const now           = new Date().toISOString()
+        db.prepare(`INSERT INTO tickets (id,display_number,sequence_number,category_id,status,created_at,recall_count) VALUES (?,?,?,?,'waiting',?,0)`)
+          .run(id, displayNumber, seq, body.categoryId, now)
         this.broadcastSSE('queue', this.getQueue())
         this.broadcastSSE('stats', this.getStats())
-        json(res, 200, { success: true, ticket: { id, displayNumber, sequenceNumber: seq, categoryId: body.categoryId } })
-      } catch (e) { json(res, 500, { error: String(e) }) }
+        reply(200, { success: true, ticket: { id, displayNumber, sequenceNumber: seq, categoryId: body.categoryId } })
+      } catch (e) { reply(500, { error: String(e) }) }
       return
     }
 
-    // POST /api/tickets/:id/call  (call specific ticket to a window)
+    // ── POST /api/tickets/:id/call ───────────────────────────────────────────
     const callMatch = path.match(/^\/api\/tickets\/([^/]+)\/call$/)
     if (method === 'POST' && callMatch) {
       const ticketId = callMatch[1]
-      const body = await readBody(req) as { windowId: string }
-      const windowId = body.windowId
-      if (!windowId) { json(res, 400, { error: 'windowId required' }); return }
+      const body     = await readBody(req) as { windowId: string }
+      if (!body.windowId) { reply(400, { error: 'windowId required' }); return }
       try {
-        const db = this.getDb()
+        const db  = this.getDb()
         const now = new Date().toISOString()
-        db.prepare(`UPDATE tickets SET status='called', called_at=?, window_id=?, recall_count=recall_count+1 WHERE id=?`)
-          .run(now, windowId, ticketId)
-        db.prepare(`UPDATE windows SET current_ticket_id=? WHERE id=?`).run(ticketId, windowId)
-        db.prepare(`INSERT INTO call_log (id, ticket_id, window_id, called_at, type) VALUES (?,?,?,?,'initial')`)
-          .run(randomUUID(), ticketId, windowId, now)
-
+        db.prepare(`UPDATE tickets SET status='called',called_at=?,window_id=?,recall_count=recall_count+1 WHERE id=?`)
+          .run(now, body.windowId, ticketId)
+        db.prepare(`UPDATE windows SET current_ticket_id=? WHERE id=?`).run(ticketId, body.windowId)
+        db.prepare(`INSERT INTO call_log (id,ticket_id,window_id,called_at,type) VALUES (?,?,?,?,'initial')`)
+          .run(randomUUID(), ticketId, body.windowId, now)
         const ticket = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId) as any
-        const win = db.prepare('SELECT * FROM windows WHERE id=?').get(windowId) as any
-
-        this.triggerAnnounce(ticket?.display_number ?? '', win?.label ?? 'Counter', windowId)
+        const win    = db.prepare('SELECT * FROM windows WHERE id=?').get(body.windowId) as any
+        this.triggerAnnounce(ticket?.display_number ?? '', win?.label ?? 'Counter', body.windowId)
         this.broadcastSSE('queue', this.getQueue())
         this.broadcastSSE('stats', this.getStats())
-        json(res, 200, { success: true, ticket })
-      } catch (e) { json(res, 500, { error: String(e) }) }
+        reply(200, { success: true, ticket })
+      } catch (e) { reply(500, { error: String(e) }) }
       return
     }
 
-    // POST /api/tickets/next/:windowId/:categoryId
+    // ── POST /api/tickets/next/:windowId/:categoryId ─────────────────────────
     const nextMatch = path.match(/^\/api\/tickets\/next\/([^/]+)\/([^/]+)$/)
     if (method === 'POST' && nextMatch) {
-      const windowId = nextMatch[1]
-      const categoryId = nextMatch[2]
+      const [, windowId, categoryId] = nextMatch
       try {
-        const db = this.getDb()
+        const db   = this.getDb()
         const next = db.prepare(
           `SELECT * FROM tickets WHERE status='waiting' AND category_id=? ORDER BY sequence_number ASC LIMIT 1`
         ).get(categoryId) as any
-
-        if (!next) { json(res, 404, { error: 'No waiting tickets' }); return }
-
+        if (!next) { reply(404, { error: 'No waiting tickets' }); return }
         const now = new Date().toISOString()
-        db.prepare(`UPDATE tickets SET status='called', called_at=?, window_id=?, recall_count=recall_count+1 WHERE id=?`)
+        db.prepare(`UPDATE tickets SET status='called',called_at=?,window_id=?,recall_count=recall_count+1 WHERE id=?`)
           .run(now, windowId, next.id)
         db.prepare(`UPDATE windows SET current_ticket_id=? WHERE id=?`).run(next.id, windowId)
-        db.prepare(`INSERT INTO call_log (id, ticket_id, window_id, called_at, type) VALUES (?,?,?,?,'initial')`)
+        db.prepare(`INSERT INTO call_log (id,ticket_id,window_id,called_at,type) VALUES (?,?,?,?,'initial')`)
           .run(randomUUID(), next.id, windowId, now)
-
         const win = db.prepare('SELECT * FROM windows WHERE id=?').get(windowId) as any
         this.triggerAnnounce(next.display_number, win?.label ?? 'Counter', windowId)
         this.broadcastSSE('queue', this.getQueue())
         this.broadcastSSE('stats', this.getStats())
-        json(res, 200, { success: true, ticket: next })
-      } catch (e) { json(res, 500, { error: String(e) }) }
+        reply(200, { success: true, ticket: next })
+      } catch (e) { reply(500, { error: String(e) }) }
       return
     }
 
-    // POST /api/tickets/:id/recall
+    // ── POST /api/tickets/:id/recall ─────────────────────────────────────────
     const recallMatch = path.match(/^\/api\/tickets\/([^/]+)\/recall$/)
     if (method === 'POST' && recallMatch) {
       const ticketId = recallMatch[1]
       try {
-        const db = this.getDb()
-        db.prepare(`UPDATE tickets SET recall_count=recall_count+1 WHERE id=?`).run(ticketId)
+        const db     = this.getDb()
         const ticket = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId) as any
+        db.prepare(`UPDATE tickets SET recall_count=recall_count+1 WHERE id=?`).run(ticketId)
         const win = ticket?.window_id
           ? db.prepare('SELECT * FROM windows WHERE id=?').get(ticket.window_id) as any
           : null
         this.triggerAnnounce(ticket?.display_number ?? '', win?.label ?? 'Counter', ticket?.window_id ?? '')
         this.broadcastSSE('queue', this.getQueue())
-        json(res, 200, { success: true })
-      } catch (e) { json(res, 500, { error: String(e) }) }
+        reply(200, { success: true })
+      } catch (e) { reply(500, { error: String(e) }) }
       return
     }
 
-    // POST /api/tickets/:id/serve
+    // ── POST /api/tickets/:id/serve ──────────────────────────────────────────
     const serveMatch = path.match(/^\/api\/tickets\/([^/]+)\/serve$/)
     if (method === 'POST' && serveMatch) {
       const ticketId = serveMatch[1]
       try {
-        const db = this.getDb()
+        const db     = this.getDb()
         const ticket = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId) as any
-        if (ticket?.window_id) {
-          db.prepare(`UPDATE windows SET current_ticket_id=NULL WHERE id=?`).run(ticket.window_id)
-        }
-        db.prepare(`UPDATE tickets SET status='served', served_at=? WHERE id=?`)
-          .run(new Date().toISOString(), ticketId)
+        if (ticket?.window_id) db.prepare(`UPDATE windows SET current_ticket_id=NULL WHERE id=?`).run(ticket.window_id)
+        db.prepare(`UPDATE tickets SET status='served',served_at=? WHERE id=?`).run(new Date().toISOString(), ticketId)
         this.broadcastSSE('queue', this.getQueue())
         this.broadcastSSE('stats', this.getStats())
-        json(res, 200, { success: true })
-      } catch (e) { json(res, 500, { error: String(e) }) }
+        reply(200, { success: true })
+      } catch (e) { reply(500, { error: String(e) }) }
       return
     }
 
-    // POST /api/tickets/:id/skip
+    // ── POST /api/tickets/:id/skip ───────────────────────────────────────────
     const skipMatch = path.match(/^\/api\/tickets\/([^/]+)\/skip$/)
     if (method === 'POST' && skipMatch) {
       const ticketId = skipMatch[1]
@@ -377,19 +467,19 @@ export class LanServer {
         db.prepare(`UPDATE tickets SET status='skipped' WHERE id=?`).run(ticketId)
         this.broadcastSSE('queue', this.getQueue())
         this.broadcastSSE('stats', this.getStats())
-        json(res, 200, { success: true })
-      } catch (e) { json(res, 500, { error: String(e) }) }
+        reply(200, { success: true })
+      } catch (e) { reply(500, { error: String(e) }) }
       return
     }
 
-    // GET / — serve the web operator panel
+    // ── GET / — serve the web operator panel ────────────────────────────────
     if (method === 'GET' && (path === '/' || path === '/index.html')) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
       res.end(this.buildPanel())
       return
     }
 
-    json(res, 404, { error: 'Not found' })
+    reply(404, { error: 'Not found' })
   }
 
   private triggerAnnounce(displayNumber: string, windowLabel: string, windowId: string, mode: 'ticket' | 'card' | 'name' = 'ticket') {
@@ -658,6 +748,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 </div>
 
 <script>
+const API_TOKEN='${this.apiToken}'
+const H={'Content-Type':'application/json','Authorization':'Bearer '+API_TOKEN}
 let state={tickets:[],windows:[],categories:[]}
 let stats={waiting:0,called:0,served:0,skipped:0}
 let session=null, es=null, selRole_='reception'
@@ -739,7 +831,7 @@ window.addEventListener('DOMContentLoaded',()=>{
 // ── SSE ───────────────────────────────────────────────────────────────────────
 function connectSSE(){
   if(es)es.close()
-  es=new EventSource('/api/events')
+  es=new EventSource('/api/events?token='+API_TOKEN)
   const dot=document.getElementById('cdot'),lbl=document.getElementById('conn-lbl')
   es.onopen=()=>{dot.classList.remove('off');lbl.textContent='Live'}
   es.onerror=()=>{dot.classList.add('off');lbl.textContent='Reconnecting'}
@@ -854,7 +946,7 @@ async function issueTicket(categoryId){
   const btn=event.currentTarget
   btn.style.opacity='0.5';btn.style.pointerEvents='none'
   try{
-    const r=await fetch('/api/tickets/issue',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({categoryId})})
+    const r=await fetch('/api/tickets/issue',{method:'POST',headers:H,body:JSON.stringify({categoryId})})
     const d=await r.json()
     if(d.ticket){
       const cat=state.categories.find(c=>c.id===categoryId)
@@ -871,7 +963,7 @@ async function recCallName(){
   const inp=document.getElementById('rec-name-inp')
   const name=inp.value.trim()
   if(!name)return
-  await fetch('/api/call-name',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,windowId:''})})
+  await fetch('/api/call-name',{method:'POST',headers:H,body:JSON.stringify({name,windowId:''})})
   inp.value=''
 }
 
@@ -983,21 +1075,21 @@ function renderRoom(){
 
 async function callNext(categoryId){
   if(!session?.windowId)return
-  await fetch('/api/tickets/next/'+session.windowId+'/'+categoryId,{method:'POST'})
+  await fetch('/api/tickets/next/'+session.windowId+'/'+categoryId,{method:'POST',headers:H})
 }
 
 async function roomCallName(){
   const inp=document.getElementById('room-name-inp')
   const name=inp.value.trim()
   if(!name||!session?.windowId)return
-  await fetch('/api/call-name',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,windowId:session.windowId})})
+  await fetch('/api/call-name',{method:'POST',headers:H,body:JSON.stringify({name,windowId:session.windowId})})
   inp.value=''
 }
 
 // ─── Shared ───────────────────────────────────────────────────────────────────
-async function doRecall(id){if(id)await fetch('/api/tickets/'+id+'/recall',{method:'POST'})}
-async function doServe(id){if(id)await fetch('/api/tickets/'+id+'/serve',{method:'POST'})}
-async function doSkip(id){if(id)await fetch('/api/tickets/'+id+'/skip',{method:'POST'})}
+async function doRecall(id){if(id)await fetch('/api/tickets/'+id+'/recall',{method:'POST',headers:H})}
+async function doServe(id){if(id)await fetch('/api/tickets/'+id+'/serve',{method:'POST',headers:H})}
+async function doSkip(id){if(id)await fetch('/api/tickets/'+id+'/skip',{method:'POST',headers:H})}
 </script>
 </body>
 </html>`

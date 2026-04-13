@@ -126,6 +126,8 @@ const api = {
   lan: {
     /** Returns the LAN URL (e.g. http://192.168.1.5:4000) or null if not started */
     getUrl: (): Promise<string | null> => ipcRenderer.invoke('lan:getUrl'),
+    /** Returns the current LAN API token (40-char hex) */
+    getToken: (): Promise<string> => ipcRenderer.invoke('lan:getToken'),
     /** Called when a remote operator triggers an announcement via LAN */
     onAnnounce: (cb: (data: { text: string; displayNumber: string }) => void) => {
       ipcRenderer.on('lan:announce', (_e, data) => cb(data))

@@ -531,8 +531,14 @@ export function setupIpcHandlers(): void {
 
   ipcMain.handle('lan:getUrl', () => (lanUrlGetter ? lanUrlGetter() : null))
 
+  // Getter is set by index.ts once the LAN server is started
+  let lanTokenGetter: (() => string) | null = null
+
+  ipcMain.handle('lan:getToken', () => (lanTokenGetter ? lanTokenGetter() : ''))
+
   // Called by index.ts to register the URL getter after server starts
   ;(global as any).__setLanUrlGetter = (fn: () => string | null) => { lanUrlGetter = fn }
+  ;(global as any).__setLanTokenGetter = (fn: () => string) => { lanTokenGetter = fn }
 
   // ─── Piper TTS ────────────────────────────────────────────────────────────
 

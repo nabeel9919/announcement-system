@@ -86,6 +86,9 @@ export default function SettingsPage() {
   const [serverUrlSaved, setServerUrlSaved] = useState(false)
   const [serverTestResult, setServerTestResult] = useState<'ok' | 'fail' | null>(null)
   const [serverTesting, setServerTesting] = useState(false)
+  const [lanUrl, setLanUrl] = useState<string | null>(null)
+  const [lanToken, setLanToken] = useState('')
+  const [lanTokenCopied, setLanTokenCopied] = useState(false)
 
   // ── Media / Videos
   const [videos, setVideos] = useState<{ name: string; fileUrl: string; size: number }[]>([])
@@ -97,10 +100,14 @@ export default function SettingsPage() {
       window.api.categories.list(),
       window.api.windows.list(),
       window.api.config.getServerUrl(),
-    ]).then(([cats, wins, url]) => {
+      window.api.lan.getUrl(),
+      window.api.lan.getToken(),
+    ]).then(([cats, wins, url, lUrl, lToken]) => {
       setCategories(cats as QueueCategory[])
       setWindows(wins as ServiceWindow[])
       setServerUrl(url as string)
+      setLanUrl(lUrl as string | null)
+      setLanToken(lToken as string)
     })
     // Load voices for audio tab
     WebSpeechProvider.getVoices().then(setVoices)
@@ -939,6 +946,44 @@ export default function SettingsPage() {
                 {serverTestResult === 'fail' && (
                   <span className="text-xs text-red-400 font-medium">Cannot reach server</span>
                 )}
+              </div>
+            </div>
+
+            {/* ── LAN Panel Token ── */}
+            <div className="mt-10 pt-8 border-t border-zinc-800">
+              <div className="flex items-center gap-3 mb-2">
+                <div className="w-9 h-9 rounded-xl bg-zinc-800 border border-zinc-700 flex items-center justify-center">
+                  <ShieldCheck className="w-4 h-4 text-zinc-400" />
+                </div>
+                <h2 className="text-base font-semibold text-zinc-100">LAN Operator Panel</h2>
+              </div>
+              <p className="text-sm text-zinc-500 mb-5">
+                Staff open the panel at{' '}
+                <span className="font-mono text-zinc-300">{lanUrl ?? 'http://&lt;your-ip&gt;:4000'}</span>{' '}
+                in their browser. The token below authenticates their requests — share it only with authorised staff.
+              </p>
+              <div>
+                <label className="block text-sm font-medium text-zinc-300 mb-1.5">API Token</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    readOnly
+                    value={lanToken}
+                    className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3.5 py-2.5 text-sm font-mono text-zinc-400 focus:outline-none select-all"
+                  />
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(lanToken)
+                      setLanTokenCopied(true)
+                      setTimeout(() => setLanTokenCopied(false), 2000)
+                    }}
+                    className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800/50 hover:bg-zinc-800 px-3.5 py-2.5 text-sm font-medium text-zinc-300 transition-colors whitespace-nowrap"
+                  >
+                    {lanTokenCopied ? '✓ Copied' : 'Copy'}
+                  </button>
+                </div>
+                <p className="text-xs text-zinc-600 mt-1.5">
+                  The token is generated once and stored locally. Restart the app to regenerate it.
+                </p>
               </div>
             </div>
           </div>

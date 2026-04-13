@@ -16,9 +16,15 @@ interface LocalConfig {
 }
 
 function getLicenseServerUrl(config?: LocalConfig): string {
-  return config?.licenseServerUrl
+  const raw = config?.licenseServerUrl
     ?? process.env.LICENSE_SERVER_URL
     ?? 'http://localhost:3001'
+  // Enforce HTTPS for any non-localhost URL so traffic to Railway is always encrypted
+  const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/.test(raw)
+  if (!isLocal && raw.startsWith('http://')) {
+    return 'https://' + raw.slice('http://'.length)
+  }
+  return raw
 }
 
 export function readLocalConfig(): LocalConfig {
