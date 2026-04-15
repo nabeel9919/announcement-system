@@ -173,6 +173,22 @@ const api = {
     ipcRenderer.on('screens:changed', () => cb())
   },
 
+  // ─── Kiosk Questions ───────────────────────────────────────────────────
+  kioskQuestions: {
+    /** Questions for a specific category (+ global), enabled only */
+    list: (categoryId?: string): Promise<unknown[]> =>
+      ipcRenderer.invoke('kiosk:questions.list', categoryId),
+    /** All questions including disabled — for the Settings editor */
+    listAll: (): Promise<unknown[]> =>
+      ipcRenderer.invoke('kiosk:questions.listAll'),
+    upsert: (q: unknown): Promise<unknown> =>
+      ipcRenderer.invoke('kiosk:questions.upsert', q),
+    delete: (id: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('kiosk:questions.delete', id),
+    reorder: (ids: string[]): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('kiosk:questions.reorder', ids),
+  },
+
   // ─── Shell ─────────────────────────────────────────────────────────────
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
 }

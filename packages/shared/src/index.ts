@@ -4,6 +4,7 @@ export * from './types/license'
 export * from './types/billing'
 export * from './types/announcement'
 export * from './types/rbac'
+export * from './types/kiosk'
 
 // Constants
 export * from './constants/sectors'

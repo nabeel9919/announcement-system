@@ -87,11 +87,30 @@ function initSchema(db: Database.Database): void {
       notes TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS kiosk_questions (
+      id TEXT PRIMARY KEY,
+      category_id TEXT,
+      question TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'single',
+      options TEXT NOT NULL DEFAULT '[]',
+      order_index INTEGER NOT NULL DEFAULT 0,
+      is_enabled INTEGER NOT NULL DEFAULT 1,
+      depends_on_question_id TEXT,
+      depends_on_option_id TEXT,
+      created_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
     CREATE INDEX IF NOT EXISTS idx_tickets_category ON tickets(category_id);
     CREATE INDEX IF NOT EXISTS idx_call_log_date ON call_log(called_at);
     CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_kiosk_q_category ON kiosk_questions(category_id);
   `)
+
+  // Add answers column to tickets if it doesn't exist yet (migration)
+  try {
+    db.exec(`ALTER TABLE tickets ADD COLUMN answers TEXT DEFAULT NULL`)
+  } catch { /* column already exists */ }
 }
 
 function logAuditEvent(
@@ -229,8 +248,8 @@ export function setupIpcHandlers(): void {
   ipcMain.handle('tickets:create', (_event, ticket: Record<string, unknown>) => {
     const db = getDb()
     db.prepare(`
-      INSERT INTO tickets (id, display_number, sequence_number, category_id, status, created_at, callee_name, recall_count)
-      VALUES (@id, @display_number, @sequence_number, @category_id, 'waiting', @created_at, @callee_name, 0)
+      INSERT INTO tickets (id, display_number, sequence_number, category_id, status, created_at, callee_name, recall_count, answers)
+      VALUES (@id, @display_number, @sequence_number, @category_id, 'waiting', @created_at, @callee_name, 0, @answers)
     `).run({
       id: ticket.id,
       display_number: ticket.displayNumber,
@@ -238,6 +257,7 @@ export function setupIpcHandlers(): void {
       category_id: ticket.categoryId,
       created_at: ticket.createdAt ?? new Date().toISOString(),
       callee_name: ticket.calleeName ?? null,
+      answers: ticket.answers ? JSON.stringify(ticket.answers) : null,
     })
     logAuditEvent(db, 'ticket_issued', ticket.id as string, ticket.displayNumber as string, null, ticket.categoryId as string)
     return ticket
@@ -593,6 +613,90 @@ export function setupIpcHandlers(): void {
 
   /** Returns the videos directory path */
   ipcMain.handle('videos:getDir', () => getVideosDir())
+
+  // ─── Kiosk Questions ──────────────────────────────────────────────────────
+
+  function mapKioskQuestion(row: any) {
+    return {
+      id: row.id,
+      categoryId: row.category_id ?? null,
+      question: row.question,
+      type: row.type,
+      options: JSON.parse(row.options ?? '[]'),
+      orderIndex: row.order_index,
+      isEnabled: row.is_enabled === 1,
+      dependsOnQuestionId: row.depends_on_question_id ?? null,
+      dependsOnOptionId: row.depends_on_option_id ?? null,
+      createdAt: row.created_at,
+    }
+  }
+
+  /** Returns enabled questions for a category (+ global questions), ordered */
+  ipcMain.handle('kiosk:questions.list', (_event, categoryId?: string) => {
+    const db = getDb()
+    const rows = db.prepare(`
+      SELECT * FROM kiosk_questions
+      WHERE is_enabled = 1
+        AND (category_id IS NULL OR category_id = ?)
+      ORDER BY order_index ASC, created_at ASC
+    `).all(categoryId ?? null)
+    return rows.map(mapKioskQuestion)
+  })
+
+  /** Returns ALL questions (including disabled) for the Settings editor */
+  ipcMain.handle('kiosk:questions.listAll', () => {
+    const db = getDb()
+    return db.prepare(`SELECT * FROM kiosk_questions ORDER BY order_index ASC, created_at ASC`).all().map(mapKioskQuestion)
+  })
+
+  /** Create or update a kiosk question */
+  ipcMain.handle('kiosk:questions.upsert', (_event, q: any) => {
+    const db = getDb()
+    db.prepare(`
+      INSERT INTO kiosk_questions (id, category_id, question, type, options, order_index, is_enabled, depends_on_question_id, depends_on_option_id, created_at)
+      VALUES (@id, @category_id, @question, @type, @options, @order_index, @is_enabled, @depends_on_question_id, @depends_on_option_id, @created_at)
+      ON CONFLICT(id) DO UPDATE SET
+        category_id = excluded.category_id,
+        question = excluded.question,
+        type = excluded.type,
+        options = excluded.options,
+        order_index = excluded.order_index,
+        is_enabled = excluded.is_enabled,
+        depends_on_question_id = excluded.depends_on_question_id,
+        depends_on_option_id = excluded.depends_on_option_id
+    `).run({
+      id: q.id,
+      category_id: q.categoryId ?? null,
+      question: q.question,
+      type: q.type ?? 'single',
+      options: JSON.stringify(q.options ?? []),
+      order_index: q.orderIndex ?? 0,
+      is_enabled: q.isEnabled !== false ? 1 : 0,
+      depends_on_question_id: q.dependsOnQuestionId ?? null,
+      depends_on_option_id: q.dependsOnOptionId ?? null,
+      created_at: q.createdAt ?? new Date().toISOString(),
+    })
+    return mapKioskQuestion(db.prepare('SELECT * FROM kiosk_questions WHERE id = ?').get(q.id))
+  })
+
+  /** Delete a kiosk question */
+  ipcMain.handle('kiosk:questions.delete', (_event, id: string) => {
+    const db = getDb()
+    // Also clear any questions that depend on this one
+    db.prepare(`UPDATE kiosk_questions SET depends_on_question_id = NULL, depends_on_option_id = NULL WHERE depends_on_question_id = ?`).run(id)
+    db.prepare(`DELETE FROM kiosk_questions WHERE id = ?`).run(id)
+    return { success: true }
+  })
+
+  /** Bulk-update order_index to match the provided id array */
+  ipcMain.handle('kiosk:questions.reorder', (_event, ids: string[]) => {
+    const db = getDb()
+    const update = db.prepare(`UPDATE kiosk_questions SET order_index = ? WHERE id = ?`)
+    db.transaction(() => {
+      ids.forEach((id, i) => update.run(i, id))
+    })()
+    return { success: true }
+  })
 }
 
 /**

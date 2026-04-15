@@ -7,12 +7,13 @@ import { cn, generateId } from '../../lib/utils'
 import {
   ArrowLeft, Plus, Pencil, Trash2, Save, X, Loader2,
   Building2, Monitor, Layers, Printer, Volume2, AlertTriangle, Globe, Music2,
-  Film, GripVertical, FolderOpen, Users, Eye, EyeOff, ShieldCheck
+  Film, GripVertical, FolderOpen, Users, Eye, EyeOff, ShieldCheck,
+  HelpCircle, ChevronUp, ChevronDown, ToggleLeft, ToggleRight, GitBranch
 } from 'lucide-react'
 import { WebSpeechProvider, PiperProvider, buildAnnouncementText } from '@announcement/audio-engine'
-import type { UserRole, SystemUser } from '@announcement/shared'
+import type { UserRole, SystemUser, KioskQuestion } from '@announcement/shared'
 
-type Tab = 'org' | 'audio' | 'categories' | 'windows' | 'printer' | 'broadcast' | 'server' | 'media' | 'users'
+type Tab = 'org' | 'audio' | 'categories' | 'windows' | 'printer' | 'broadcast' | 'server' | 'media' | 'users' | 'kiosk'
 
 const COLORS = [
   '#4F46E5', '#0EA5E9', '#10B981', '#F59E0B',
@@ -300,6 +301,7 @@ export default function SettingsPage() {
     { id: 'categories', label: 'Categories', icon: Layers },
     { id: 'windows', label: 'Windows', icon: Monitor },
     { id: 'users', label: 'Staff & Roles', icon: Users },
+    { id: 'kiosk', label: 'Kiosk Flow', icon: HelpCircle },
     { id: 'printer', label: 'Printer', icon: Printer },
     { id: 'broadcast', label: 'Emergency', icon: AlertTriangle },
     { id: 'server', label: 'Server', icon: Globe },
@@ -989,6 +991,9 @@ export default function SettingsPage() {
           </div>
         )}
 
+        {/* ── Kiosk Flow ────────────────────────────────────────────────────── */}
+        {tab === 'kiosk' && <KioskFlowTab />}
+
         {/* ── Staff & Roles ─────────────────────────────────────────────────── */}
         {tab === 'users' && <UsersTab />}
 
@@ -1218,6 +1223,339 @@ function UsersTab() {
                 Cancel
               </button>
               <button onClick={save} className="flex-1 rounded-lg bg-primary-600 hover:bg-primary-500 px-4 py-2 text-sm font-semibold text-white transition-colors">
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Kiosk Flow Tab ──────────────────────────────────────────────────────────
+
+function emptyQuestion(orderIndex: number): KioskQuestion {
+  return {
+    id: crypto.randomUUID(),
+    categoryId: null,
+    question: '',
+    type: 'single',
+    options: [{ id: crypto.randomUUID(), label: '' }],
+    orderIndex,
+    isEnabled: true,
+    dependsOnQuestionId: null,
+    dependsOnOptionId: null,
+    createdAt: new Date().toISOString(),
+  }
+}
+
+function KioskFlowTab() {
+  const [questions, setQuestions] = useState<KioskQuestion[]>([])
+  const [categories, setCategories] = useState<{ id: string; label: string; code: string }[]>([])
+  const [editing, setEditing] = useState<KioskQuestion | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    window.api.kioskQuestions.listAll().then((qs) => setQuestions(qs as KioskQuestion[]))
+    window.api.categories.list().then((cs: any) => setCategories(cs))
+  }, [])
+
+  async function saveQuestion() {
+    if (!editing) return
+    if (!editing.question.trim()) { setError('Question text is required'); return }
+    if (editing.type === 'single' && editing.options.filter(o => o.label.trim()).length === 0) {
+      setError('Add at least one option'); return
+    }
+    setError('')
+    setSaving(true)
+    try {
+      const cleaned: KioskQuestion = {
+        ...editing,
+        options: editing.type === 'single'
+          ? editing.options.filter(o => o.label.trim())
+          : [],
+      }
+      const saved = await window.api.kioskQuestions.upsert(cleaned) as KioskQuestion
+      setQuestions(prev => {
+        const idx = prev.findIndex(q => q.id === saved.id)
+        return idx >= 0 ? prev.map(q => q.id === saved.id ? saved : q) : [...prev, saved]
+      })
+      setEditing(null)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function deleteQuestion(id: string) {
+    if (!confirm('Delete this question?')) return
+    await window.api.kioskQuestions.delete(id)
+    setQuestions(prev => prev.filter(q => q.id !== id))
+  }
+
+  async function toggleEnabled(q: KioskQuestion) {
+    const updated = { ...q, isEnabled: !q.isEnabled }
+    await window.api.kioskQuestions.upsert(updated)
+    setQuestions(prev => prev.map(x => x.id === q.id ? updated : x))
+  }
+
+  async function move(id: string, dir: 'up' | 'down') {
+    const idx = questions.findIndex(q => q.id === id)
+    if (dir === 'up' && idx === 0) return
+    if (dir === 'down' && idx === questions.length - 1) return
+    const next = [...questions]
+    const swap = dir === 'up' ? idx - 1 : idx + 1
+    ;[next[idx], next[swap]] = [next[swap], next[idx]]
+    const reindexed = next.map((q, i) => ({ ...q, orderIndex: i }))
+    setQuestions(reindexed)
+    await window.api.kioskQuestions.reorder(reindexed.map(q => q.id))
+  }
+
+  function addOption() {
+    if (!editing) return
+    setEditing({ ...editing, options: [...editing.options, { id: crypto.randomUUID(), label: '' }] })
+  }
+
+  function updateOption(optId: string, label: string) {
+    if (!editing) return
+    setEditing({ ...editing, options: editing.options.map(o => o.id === optId ? { ...o, label } : o) })
+  }
+
+  function updateOptionWindow(optId: string, windowId: string) {
+    if (!editing) return
+    setEditing({ ...editing, options: editing.options.map(o => o.id === optId ? { ...o, routesToWindowId: windowId || undefined } : o) })
+  }
+
+  function removeOption(optId: string) {
+    if (!editing) return
+    setEditing({ ...editing, options: editing.options.filter(o => o.id !== optId) })
+  }
+
+  const categoryLabel = (id: string | null) =>
+    id ? (categories.find(c => c.id === id)?.label ?? id) : 'All categories'
+
+  return (
+    <div className="space-y-6 max-w-2xl">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-zinc-100">Kiosk Flow</h2>
+          <p className="text-sm text-zinc-500 mt-1">
+            Configure the questions asked before a ticket is issued. Answers print on the receipt.
+          </p>
+        </div>
+        <button
+          onClick={() => { setError(''); setEditing(emptyQuestion(questions.length)) }}
+          className="flex items-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors"
+        >
+          <Plus className="w-4 h-4" /> Add Question
+        </button>
+      </div>
+
+      {/* Question list */}
+      {questions.length === 0 && (
+        <div className="rounded-xl border border-dashed border-zinc-700 py-16 text-center">
+          <HelpCircle className="w-10 h-10 text-zinc-700 mx-auto mb-3" />
+          <p className="text-zinc-500 text-sm">No questions yet.</p>
+          <p className="text-zinc-600 text-xs mt-1">Add a question to start building the kiosk flow.</p>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {questions.map((q, idx) => (
+          <div
+            key={q.id}
+            className={cn(
+              'rounded-xl border p-4 transition-colors',
+              q.isEnabled ? 'border-zinc-700 bg-zinc-900/40' : 'border-zinc-800 bg-zinc-900/20 opacity-60'
+            )}
+          >
+            <div className="flex items-start gap-3">
+              {/* Order controls */}
+              <div className="flex flex-col gap-0.5 mt-0.5">
+                <button onClick={() => move(q.id, 'up')} disabled={idx === 0}
+                  className="text-zinc-600 hover:text-zinc-300 disabled:opacity-20 transition-colors">
+                  <ChevronUp className="w-3.5 h-3.5" />
+                </button>
+                <button onClick={() => move(q.id, 'down')} disabled={idx === questions.length - 1}
+                  className="text-zinc-600 hover:text-zinc-300 disabled:opacity-20 transition-colors">
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap mb-1">
+                  <span className="text-sm font-medium text-zinc-100 truncate">{q.question}</span>
+                  <span className={cn(
+                    'text-[10px] px-1.5 py-0.5 rounded font-medium border',
+                    q.type === 'single' ? 'text-blue-400 bg-blue-500/10 border-blue-500/30' : 'text-purple-400 bg-purple-500/10 border-purple-500/30'
+                  )}>
+                    {q.type === 'single' ? 'Choice' : 'Text'}
+                  </span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded font-medium border text-zinc-500 bg-zinc-800 border-zinc-700">
+                    {categoryLabel(q.categoryId)}
+                  </span>
+                  {q.dependsOnQuestionId && (
+                    <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-medium border text-amber-400 bg-amber-500/10 border-amber-500/30">
+                      <GitBranch className="w-2.5 h-2.5" /> Conditional
+                    </span>
+                  )}
+                </div>
+                {q.type === 'single' && q.options.length > 0 && (
+                  <p className="text-xs text-zinc-500 truncate">
+                    {q.options.map(o => o.label).join(' · ')}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <button onClick={() => toggleEnabled(q)} className="text-zinc-500 hover:text-zinc-200 transition-colors" title={q.isEnabled ? 'Disable' : 'Enable'}>
+                  {q.isEnabled ? <ToggleRight className="w-4 h-4 text-emerald-400" /> : <ToggleLeft className="w-4 h-4" />}
+                </button>
+                <button onClick={() => { setError(''); setEditing({ ...q }) }}
+                  className="text-zinc-500 hover:text-zinc-200 transition-colors">
+                  <Pencil className="w-4 h-4" />
+                </button>
+                <button onClick={() => deleteQuestion(q.id)}
+                  className="text-zinc-500 hover:text-red-400 transition-colors">
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Edit / Create drawer */}
+      {editing && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-lg bg-zinc-900 border border-zinc-700 rounded-2xl p-6 space-y-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold text-zinc-100">
+                {questions.some(q => q.id === editing.id) ? 'Edit Question' : 'New Question'}
+              </h3>
+              <button onClick={() => setEditing(null)} className="text-zinc-500 hover:text-zinc-200"><X className="w-4 h-4" /></button>
+            </div>
+
+            {error && <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{error}</p>}
+
+            {/* Question text */}
+            <div>
+              <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1.5">Question</label>
+              <input
+                value={editing.question}
+                onChange={e => setEditing({ ...editing, question: e.target.value })}
+                placeholder="e.g. Which service would you like today?"
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              />
+            </div>
+
+            {/* Type */}
+            <div>
+              <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1.5">Answer Type</label>
+              <div className="grid grid-cols-2 gap-3">
+                {(['single', 'text'] as const).map(t => (
+                  <button key={t} onClick={() => setEditing({ ...editing, type: t })}
+                    className={cn(
+                      'rounded-lg border py-2.5 text-sm font-medium transition-colors',
+                      editing.type === t
+                        ? 'border-primary-500 bg-primary-500/10 text-primary-400'
+                        : 'border-zinc-700 bg-zinc-800/50 text-zinc-400 hover:border-zinc-600'
+                    )}>
+                    {t === 'single' ? '◉ Single Choice' : '⌨ Free Text'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Category */}
+            <div>
+              <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1.5">Show For</label>
+              <select
+                value={editing.categoryId ?? ''}
+                onChange={e => setEditing({ ...editing, categoryId: e.target.value || null })}
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3.5 py-2.5 text-sm text-zinc-100 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              >
+                <option value="">All categories</option>
+                {categories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+              </select>
+            </div>
+
+            {/* Conditional dependency */}
+            <div>
+              <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1.5">
+                Show Only When (optional)
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <select
+                  value={editing.dependsOnQuestionId ?? ''}
+                  onChange={e => setEditing({ ...editing, dependsOnQuestionId: e.target.value || null, dependsOnOptionId: null })}
+                  className="rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                >
+                  <option value="">— Any —</option>
+                  {questions.filter(q => q.id !== editing.id && q.type === 'single').map(q => (
+                    <option key={q.id} value={q.id}>{q.question.slice(0, 40)}</option>
+                  ))}
+                </select>
+                <select
+                  value={editing.dependsOnOptionId ?? ''}
+                  onChange={e => setEditing({ ...editing, dependsOnOptionId: e.target.value || null })}
+                  disabled={!editing.dependsOnQuestionId}
+                  className="rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-40"
+                >
+                  <option value="">— Any answer —</option>
+                  {(questions.find(q => q.id === editing.dependsOnQuestionId)?.options ?? []).map(o => (
+                    <option key={o.id} value={o.id}>{o.label}</option>
+                  ))}
+                </select>
+              </div>
+              <p className="text-xs text-zinc-600 mt-1">Only show this question if a previous question was answered with a specific choice.</p>
+            </div>
+
+            {/* Options (for single choice) */}
+            {editing.type === 'single' && (
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1.5">Options</label>
+                <div className="space-y-2">
+                  {editing.options.map((opt) => (
+                    <div key={opt.id} className="flex gap-2 items-center">
+                      <input
+                        value={opt.label}
+                        onChange={e => updateOption(opt.id, e.target.value)}
+                        placeholder="Option label"
+                        className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                      />
+                      <select
+                        value={opt.routesToWindowId ?? ''}
+                        onChange={e => updateOptionWindow(opt.id, e.target.value)}
+                        title="Route to window (optional)"
+                        className="w-32 rounded-lg border border-zinc-700 bg-zinc-800/50 px-2 py-2 text-xs text-zinc-400 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                      >
+                        <option value="">No routing</option>
+                        {/* Windows are not loaded here — user selects in the kiosk settings; this is a placeholder */}
+                      </select>
+                      <button onClick={() => removeOption(opt.id)} className="text-zinc-600 hover:text-red-400 transition-colors flex-shrink-0">
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                  <button onClick={addOption}
+                    className="flex items-center gap-1.5 text-xs text-primary-400 hover:text-primary-300 transition-colors mt-1">
+                    <Plus className="w-3.5 h-3.5" /> Add option
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-3 pt-2">
+              <button onClick={() => setEditing(null)}
+                className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800/50 py-2.5 text-sm font-medium text-zinc-300 hover:bg-zinc-800 transition-colors">
+                Cancel
+              </button>
+              <button onClick={saveQuestion} disabled={saving}
+                className="flex-1 rounded-lg bg-primary-600 hover:bg-primary-500 disabled:opacity-50 py-2.5 text-sm font-semibold text-white transition-colors flex items-center justify-center gap-2">
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                 Save
               </button>
             </div>
