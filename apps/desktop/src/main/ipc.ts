@@ -634,6 +634,30 @@ export function setupIpcHandlers(): void {
   /** Returns the videos directory path */
   ipcMain.handle('videos:getDir', () => getVideosDir())
 
+  // ─── Kiosk Idle/Attract Screen Config ────────────────────────────────────
+
+  const DEFAULT_IDLE_CONFIG = {
+    enabled: true,
+    timeoutSeconds: 45,
+    welcomeMessage: 'Karibu!',
+    tagline: 'Ujihudumie Mwenyewe • Self Service',
+    steps: [
+      { icon: '📋', title: 'Chagua Huduma', subtitle: 'Select your service' },
+      { icon: '🎫', title: 'Pokea Tiketi', subtitle: 'Get your ticket' },
+      { icon: '⏳', title: 'Subiri Kuitwa', subtitle: 'Wait to be called' },
+    ],
+  }
+
+  ipcMain.handle('kiosk:idleConfig.get', () => {
+    const config = readLocalConfig() as any
+    return { ...DEFAULT_IDLE_CONFIG, ...(config.kioskIdleConfig ?? {}) }
+  })
+
+  ipcMain.handle('kiosk:idleConfig.set', (_event, cfg: any) => {
+    writeLocalConfig({ kioskIdleConfig: cfg } as any)
+    return { success: true }
+  })
+
   // ─── Kiosk Questions ──────────────────────────────────────────────────────
 
   function mapKioskQuestion(row: any) {

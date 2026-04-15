@@ -187,6 +187,12 @@ const api = {
     summary: (days?: number): Promise<{ total: number; ratings: unknown[]; choices: unknown[] }> => ipcRenderer.invoke('feedback:summary', days),
   },
 
+  // ─── Kiosk Idle Config ─────────────────────────────────────────────────
+  kioskIdleConfig: {
+    get: (): Promise<unknown> => ipcRenderer.invoke('kiosk:idleConfig.get'),
+    set: (cfg: unknown): Promise<{ success: boolean }> => ipcRenderer.invoke('kiosk:idleConfig.set', cfg),
+  },
+
   // ─── Kiosk Questions ───────────────────────────────────────────────────
   kioskQuestions: {
     /** Questions for a specific category (+ global), enabled only */

@@ -1255,6 +1255,17 @@ function emptyQuestion(orderIndex: number): KioskQuestion {
   }
 }
 
+interface IdleStep { icon: string; title: string; subtitle: string }
+interface IdleConfig {
+  enabled: boolean
+  timeoutSeconds: number
+  welcomeMessage: string
+  tagline: string
+  steps: IdleStep[]
+}
+
+const IDLE_TIMEOUTS = [15, 30, 45, 60, 120]
+
 function KioskFlowTab() {
   const [questions, setQuestions] = useState<KioskQuestion[]>([])
   const [categories, setCategories] = useState<{ id: string; label: string; code: string }[]>([])
@@ -1262,10 +1273,38 @@ function KioskFlowTab() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
+  // Idle screen config
+  const [idleCfg, setIdleCfg] = useState<IdleConfig>({
+    enabled: true, timeoutSeconds: 45,
+    welcomeMessage: 'Karibu!',
+    tagline: 'Ujihudumie Mwenyewe • Self Service',
+    steps: [
+      { icon: '📋', title: 'Chagua Huduma', subtitle: 'Select your service' },
+      { icon: '🎫', title: 'Pokea Tiketi', subtitle: 'Get your ticket' },
+      { icon: '⏳', title: 'Subiri Kuitwa', subtitle: 'Wait to be called' },
+    ],
+  })
+  const [idleSaving, setIdleSaving] = useState(false)
+  const [idleSaved, setIdleSaved] = useState(false)
+
   useEffect(() => {
     window.api.kioskQuestions.listAll().then((qs) => setQuestions(qs as KioskQuestion[]))
     window.api.categories.list().then((cs: any) => setCategories(cs))
+    window.api.kioskIdleConfig.get().then((cfg) => { if (cfg) setIdleCfg(cfg as IdleConfig) })
   }, [])
+
+  async function saveIdleConfig() {
+    setIdleSaving(true)
+    await window.api.kioskIdleConfig.set(idleCfg)
+    setIdleSaving(false)
+    setIdleSaved(true)
+    setTimeout(() => setIdleSaved(false), 2000)
+  }
+
+  function updateStep(i: number, field: keyof IdleStep, val: string) {
+    const steps = idleCfg.steps.map((s, j) => j === i ? { ...s, [field]: val } : s)
+    setIdleCfg({ ...idleCfg, steps })
+  }
 
   async function saveQuestion() {
     if (!editing) return
@@ -1430,6 +1469,96 @@ function KioskFlowTab() {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* ── Idle / Attract Screen Config ──────────────────────────────────── */}
+      <div className="mt-10 pt-8 border-t border-zinc-800 space-y-5">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-base font-semibold text-zinc-100">Idle / Attract Screen</h3>
+            <p className="text-sm text-zinc-500 mt-1">
+              Shown when the kiosk is untouched. Guides customers on how to use it.
+            </p>
+          </div>
+          {/* Enable toggle */}
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <div onClick={() => setIdleCfg({ ...idleCfg, enabled: !idleCfg.enabled })}
+              className={cn('w-10 h-5 rounded-full flex items-center px-0.5 cursor-pointer transition-colors', idleCfg.enabled ? 'bg-primary-600' : 'bg-zinc-700')}>
+              <div className={cn('w-4 h-4 rounded-full bg-white transition-transform', idleCfg.enabled ? 'translate-x-5' : 'translate-x-0')} />
+            </div>
+            <span className="text-sm text-zinc-400">{idleCfg.enabled ? 'On' : 'Off'}</span>
+          </label>
+        </div>
+
+        {idleCfg.enabled && (
+          <div className="space-y-4">
+            {/* Timeout */}
+            <div>
+              <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1.5">Show after</label>
+              <div className="flex gap-2 flex-wrap">
+                {IDLE_TIMEOUTS.map(s => (
+                  <button key={s} onClick={() => setIdleCfg({ ...idleCfg, timeoutSeconds: s })}
+                    className={cn('px-3 py-1.5 rounded-lg border text-sm font-medium transition-colors',
+                      idleCfg.timeoutSeconds === s
+                        ? 'border-primary-500 bg-primary-500/10 text-primary-400'
+                        : 'border-zinc-700 bg-zinc-800/50 text-zinc-400 hover:border-zinc-600'
+                    )}>
+                    {s < 60 ? `${s}s` : `${s / 60}min`}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Welcome message */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1.5">Welcome Message</label>
+                <input value={idleCfg.welcomeMessage} onChange={e => setIdleCfg({ ...idleCfg, welcomeMessage: e.target.value })}
+                  placeholder="Karibu!"
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-primary-500" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1.5">Tagline</label>
+                <input value={idleCfg.tagline} onChange={e => setIdleCfg({ ...idleCfg, tagline: e.target.value })}
+                  placeholder="Ujihudumie Mwenyewe"
+                  className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-primary-500" />
+              </div>
+            </div>
+
+            {/* Steps */}
+            <div>
+              <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-2">Guide Steps</label>
+              <div className="space-y-2">
+                {idleCfg.steps.map((step, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <input value={step.icon} onChange={e => updateStep(i, 'icon', e.target.value)}
+                      className="w-12 rounded-lg border border-zinc-700 bg-zinc-800/50 px-2 py-2 text-center text-lg focus:outline-none focus:ring-1 focus:ring-primary-500" />
+                    <input value={step.title} onChange={e => updateStep(i, 'title', e.target.value)}
+                      placeholder="Step title"
+                      className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-primary-500" />
+                    <input value={step.subtitle} onChange={e => updateStep(i, 'subtitle', e.target.value)}
+                      placeholder="Subtitle / translation"
+                      className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-400 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-primary-500" />
+                    <button onClick={() => setIdleCfg({ ...idleCfg, steps: idleCfg.steps.filter((_, j) => j !== i) })}
+                      className="text-zinc-600 hover:text-red-400 transition-colors flex-shrink-0"><X className="w-4 h-4" /></button>
+                  </div>
+                ))}
+                {idleCfg.steps.length < 4 && (
+                  <button onClick={() => setIdleCfg({ ...idleCfg, steps: [...idleCfg.steps, { icon: '✅', title: '', subtitle: '' }] })}
+                    className="flex items-center gap-1.5 text-xs text-primary-400 hover:text-primary-300 transition-colors">
+                    <Plus className="w-3.5 h-3.5" /> Add step
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <button onClick={saveIdleConfig} disabled={idleSaving}
+          className="flex items-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-500 disabled:opacity-50 px-5 py-2.5 text-sm font-semibold text-white transition-colors">
+          {idleSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+          {idleSaved ? 'Saved!' : 'Save Idle Settings'}
+        </button>
       </div>
 
       {/* Edit / Create drawer */}
