@@ -100,11 +100,31 @@ function initSchema(db: Database.Database): void {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS feedback_questions (
+      id TEXT PRIMARY KEY,
+      question TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'star',
+      options TEXT NOT NULL DEFAULT '[]',
+      order_index INTEGER NOT NULL DEFAULT 0,
+      is_enabled INTEGER NOT NULL DEFAULT 1,
+      is_required INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS feedback_responses (
+      id TEXT PRIMARY KEY,
+      submitted_at TEXT NOT NULL,
+      category_id TEXT,
+      category_label TEXT,
+      answers TEXT NOT NULL DEFAULT '[]'
+    );
+
     CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
     CREATE INDEX IF NOT EXISTS idx_tickets_category ON tickets(category_id);
     CREATE INDEX IF NOT EXISTS idx_call_log_date ON call_log(called_at);
     CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(timestamp);
     CREATE INDEX IF NOT EXISTS idx_kiosk_q_category ON kiosk_questions(category_id);
+    CREATE INDEX IF NOT EXISTS idx_feedback_date ON feedback_responses(submitted_at);
   `)
 
   // Add answers column to tickets if it doesn't exist yet (migration)
@@ -696,6 +716,137 @@ export function setupIpcHandlers(): void {
       ids.forEach((id, i) => update.run(i, id))
     })()
     return { success: true }
+  })
+
+  // ─── Feedback ─────────────────────────────────────────────────────────────
+
+  function mapFeedbackQuestion(row: any) {
+    return {
+      id: row.id,
+      question: row.question,
+      type: row.type,
+      options: JSON.parse(row.options ?? '[]'),
+      orderIndex: row.order_index,
+      isEnabled: row.is_enabled === 1,
+      isRequired: row.is_required === 1,
+      createdAt: row.created_at,
+    }
+  }
+
+  /** Enabled feedback questions ordered */
+  ipcMain.handle('feedback:questions.list', () => {
+    const db = getDb()
+    return db.prepare(`SELECT * FROM feedback_questions WHERE is_enabled = 1 ORDER BY order_index ASC, created_at ASC`).all().map(mapFeedbackQuestion)
+  })
+
+  /** All feedback questions including disabled — for Settings */
+  ipcMain.handle('feedback:questions.listAll', () => {
+    const db = getDb()
+    return db.prepare(`SELECT * FROM feedback_questions ORDER BY order_index ASC, created_at ASC`).all().map(mapFeedbackQuestion)
+  })
+
+  ipcMain.handle('feedback:questions.upsert', (_event, q: any) => {
+    const db = getDb()
+    db.prepare(`
+      INSERT INTO feedback_questions (id, question, type, options, order_index, is_enabled, is_required, created_at)
+      VALUES (@id, @question, @type, @options, @order_index, @is_enabled, @is_required, @created_at)
+      ON CONFLICT(id) DO UPDATE SET
+        question = excluded.question,
+        type = excluded.type,
+        options = excluded.options,
+        order_index = excluded.order_index,
+        is_enabled = excluded.is_enabled,
+        is_required = excluded.is_required
+    `).run({
+      id: q.id,
+      question: q.question,
+      type: q.type ?? 'star',
+      options: JSON.stringify(q.options ?? []),
+      order_index: q.orderIndex ?? 0,
+      is_enabled: q.isEnabled !== false ? 1 : 0,
+      is_required: q.isRequired ? 1 : 0,
+      created_at: q.createdAt ?? new Date().toISOString(),
+    })
+    return mapFeedbackQuestion(db.prepare('SELECT * FROM feedback_questions WHERE id = ?').get(q.id))
+  })
+
+  ipcMain.handle('feedback:questions.delete', (_event, id: string) => {
+    const db = getDb()
+    db.prepare(`DELETE FROM feedback_questions WHERE id = ?`).run(id)
+    return { success: true }
+  })
+
+  ipcMain.handle('feedback:questions.reorder', (_event, ids: string[]) => {
+    const db = getDb()
+    const update = db.prepare(`UPDATE feedback_questions SET order_index = ? WHERE id = ?`)
+    db.transaction(() => { ids.forEach((id, i) => update.run(i, id)) })()
+    return { success: true }
+  })
+
+  /** Submit a feedback response */
+  ipcMain.handle('feedback:submit', (_event, response: any) => {
+    const db = getDb()
+    const { randomUUID } = require('crypto')
+    const id = response.id ?? randomUUID()
+    const now = new Date().toISOString()
+    db.prepare(`
+      INSERT INTO feedback_responses (id, submitted_at, category_id, category_label, answers)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(id, now, response.categoryId ?? null, response.categoryLabel ?? null, JSON.stringify(response.answers ?? []))
+    return { success: true, id }
+  })
+
+  /** Fetch responses for analytics — defaults to last 30 days */
+  ipcMain.handle('feedback:responses.list', (_event, days = 30) => {
+    const db = getDb()
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+    const rows = db.prepare(`SELECT * FROM feedback_responses WHERE submitted_at >= ? ORDER BY submitted_at DESC`).all(since) as any[]
+    return rows.map(r => ({
+      id: r.id,
+      submittedAt: r.submitted_at,
+      categoryId: r.category_id,
+      categoryLabel: r.category_label,
+      answers: JSON.parse(r.answers ?? '[]'),
+    }))
+  })
+
+  /** Summary stats for the feedback dashboard */
+  ipcMain.handle('feedback:summary', (_event, days = 30) => {
+    const db = getDb()
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+    const rows = db.prepare(`SELECT answers FROM feedback_responses WHERE submitted_at >= ?`).all(since) as any[]
+
+    const total = rows.length
+    // Aggregate scores per question
+    const scoreMap: Record<string, { sum: number; count: number; label: string }> = {}
+    const choiceMap: Record<string, Record<string, number>> = {}
+
+    for (const row of rows) {
+      const answers: any[] = JSON.parse(row.answers ?? '[]')
+      for (const a of answers) {
+        if (a.type === 'star' || a.type === 'emoji') {
+          if (!scoreMap[a.questionId]) scoreMap[a.questionId] = { sum: 0, count: 0, label: a.question }
+          if (a.score) { scoreMap[a.questionId].sum += a.score; scoreMap[a.questionId].count++ }
+        } else if (a.type === 'choice') {
+          if (!choiceMap[a.questionId]) choiceMap[a.questionId] = {}
+          if (a.value) choiceMap[a.questionId][a.value] = (choiceMap[a.questionId][a.value] ?? 0) + 1
+        }
+      }
+    }
+
+    const ratings = Object.entries(scoreMap).map(([qId, v]) => ({
+      questionId: qId,
+      question: v.label,
+      average: v.count > 0 ? Math.round((v.sum / v.count) * 10) / 10 : 0,
+      count: v.count,
+    }))
+
+    const choices = Object.entries(choiceMap).map(([qId, counts]) => ({
+      questionId: qId,
+      counts,
+    }))
+
+    return { total, ratings, choices }
   })
 }
 

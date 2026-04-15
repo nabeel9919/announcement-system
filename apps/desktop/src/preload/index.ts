@@ -173,6 +173,20 @@ const api = {
     ipcRenderer.on('screens:changed', () => cb())
   },
 
+  // ─── Feedback ──────────────────────────────────────────────────────────
+  feedback: {
+    /** Enabled questions for the kiosk feedback screen */
+    listQuestions: (): Promise<unknown[]> => ipcRenderer.invoke('feedback:questions.list'),
+    /** All questions including disabled — for Settings editor */
+    listAllQuestions: (): Promise<unknown[]> => ipcRenderer.invoke('feedback:questions.listAll'),
+    upsertQuestion: (q: unknown): Promise<unknown> => ipcRenderer.invoke('feedback:questions.upsert', q),
+    deleteQuestion: (id: string): Promise<{ success: boolean }> => ipcRenderer.invoke('feedback:questions.delete', id),
+    reorderQuestions: (ids: string[]): Promise<{ success: boolean }> => ipcRenderer.invoke('feedback:questions.reorder', ids),
+    submit: (response: unknown): Promise<{ success: boolean; id: string }> => ipcRenderer.invoke('feedback:submit', response),
+    listResponses: (days?: number): Promise<unknown[]> => ipcRenderer.invoke('feedback:responses.list', days),
+    summary: (days?: number): Promise<{ total: number; ratings: unknown[]; choices: unknown[] }> => ipcRenderer.invoke('feedback:summary', days),
+  },
+
   // ─── Kiosk Questions ───────────────────────────────────────────────────
   kioskQuestions: {
     /** Questions for a specific category (+ global), enabled only */

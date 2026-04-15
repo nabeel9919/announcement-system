@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react'
 import { useAppStore } from '../../store/app'
 import { useQueueStore } from '../../store/queue'
 import { cn, minutesSince } from '../../lib/utils'
-import { ArrowLeft, TrendingUp, Clock, CheckCircle, Users, BarChart2, RefreshCw } from 'lucide-react'
+import { ArrowLeft, TrendingUp, Clock, CheckCircle, Users, BarChart2, RefreshCw, Star, MessageSquare } from 'lucide-react'
 
 interface HourBucket { hour: number; issued: number; served: number }
 interface CatPerf { code: string; label: string; color: string; served: number; skipped: number; waiting: number; avgWaitMin: number }
+interface FeedbackRating { questionId: string; question: string; average: number; count: number }
 
 export default function AnalyticsPage() {
   const { setPage } = useAppStore()
@@ -13,14 +14,17 @@ export default function AnalyticsPage() {
   const [stats, setStats] = useState({ waiting: 0, called: 0, served: 0, skipped: 0 })
   const [hourly, setHourly] = useState<HourBucket[]>([])
   const [catPerf, setCatPerf] = useState<CatPerf[]>([])
+  const [feedbackTotal, setFeedbackTotal] = useState(0)
+  const [feedbackRatings, setFeedbackRatings] = useState<FeedbackRating[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshedAt, setRefreshedAt] = useState(new Date())
 
   async function load() {
     setLoading(true)
-    const [s, tickets] = await Promise.all([
+    const [s, tickets, fbSummary] = await Promise.all([
       window.api.stats.today(),
       window.api.tickets.list(),
+      window.api.feedback.summary(30).catch(() => ({ total: 0, ratings: [], choices: [] })),
     ])
     setStats(s as any)
 
@@ -56,6 +60,8 @@ export default function AnalyticsPage() {
       }
     })
     setCatPerf(cp)
+    setFeedbackTotal((fbSummary as any).total ?? 0)
+    setFeedbackRatings(((fbSummary as any).ratings ?? []) as FeedbackRating[])
     setRefreshedAt(new Date())
     setLoading(false)
   }
@@ -210,6 +216,52 @@ export default function AnalyticsPage() {
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Feedback / Maoni summary */}
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">
+          <div className="flex items-center gap-2 mb-5">
+            <Star className="w-4 h-4 text-amber-400" />
+            <h2 className="text-sm font-semibold text-zinc-100">Customer Feedback — Last 30 Days</h2>
+            <span className="ml-auto flex items-center gap-1.5 text-xs text-zinc-500">
+              <MessageSquare className="w-3.5 h-3.5" />
+              {feedbackTotal} {feedbackTotal === 1 ? 'response' : 'responses'}
+            </span>
+          </div>
+
+          {feedbackTotal === 0 ? (
+            <p className="text-center text-zinc-600 text-sm py-6">
+              {loading ? 'Loading...' : 'No feedback responses yet. Configure questions in Settings → Feedback.'}
+            </p>
+          ) : (
+            <div className="space-y-5">
+              {feedbackRatings.map((r) => {
+                const pct = ((r.average - 1) / 4) * 100  // 1–5 scale → 0–100%
+                const color = r.average >= 4 ? 'bg-emerald-500' : r.average >= 3 ? 'bg-amber-500' : 'bg-red-500'
+                return (
+                  <div key={r.questionId}>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <p className="text-sm text-zinc-300 truncate flex-1 mr-4">{r.question}</p>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <span className="text-lg font-bold text-zinc-100">{r.average.toFixed(1)}</span>
+                        <span className="text-xs text-zinc-500">/ 5</span>
+                        <span className="text-xs text-zinc-600 ml-1">({r.count})</span>
+                      </div>
+                    </div>
+                    <div className="w-full h-2 bg-zinc-800 rounded-full overflow-hidden">
+                      <div className={cn('h-full rounded-full transition-all', color)} style={{ width: `${pct}%` }} />
+                    </div>
+                    {/* Star display */}
+                    <div className="flex items-center gap-0.5 mt-1">
+                      {[1, 2, 3, 4, 5].map(s => (
+                        <span key={s} className={cn('text-xs', s <= Math.round(r.average) ? 'text-amber-400' : 'text-zinc-700')}>★</span>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
 
       </div>

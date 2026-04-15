@@ -1,86 +1,105 @@
 import { useEffect, useState, useRef } from 'react'
 import { useAppStore } from '../../store/app'
 import { cn, generateId, padNumber, formatTime } from '../../lib/utils'
-import type { QueueCategory, KioskQuestion, KioskAnswer } from '@announcement/shared'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import type { QueueCategory, KioskQuestion, KioskAnswer, FeedbackQuestion, FeedbackAnswerItem } from '@announcement/shared'
+import { ChevronLeft, ChevronRight, Ticket, Star, MessageSquare } from 'lucide-react'
 
-type KioskStep = 'select' | 'questions' | 'issuing' | 'done'
+// ── Mode ─────────────────────────────────────────────────────────────────────
+type KioskMode = 'home' | 'ticket' | 'feedback'
+
+// ── Ticket sub-steps ─────────────────────────────────────────────────────────
+type TicketStep = 'select' | 'questions' | 'issuing' | 'done'
+
+// ── Feedback sub-steps ───────────────────────────────────────────────────────
+type FeedbackStep = 'questions' | 'thankyou'
 
 const RESET_SECONDS = 12
 
+// ── Emoji sets for feedback ──────────────────────────────────────────────────
+const EMOJI_OPTIONS = [
+  { score: 1, emoji: '😞', label: 'Very Bad' },
+  { score: 2, emoji: '😕', label: 'Bad' },
+  { score: 3, emoji: '😐', label: 'Okay' },
+  { score: 4, emoji: '😊', label: 'Good' },
+  { score: 5, emoji: '😄', label: 'Excellent' },
+]
+
 export default function KioskPage() {
   const { config } = useAppStore()
+
+  // ── Mode ─────────────────────────────────────────────────────────────────
+  const [mode, setMode] = useState<KioskMode>('home')
+
+  // ── Ticket state ─────────────────────────────────────────────────────────
   const [categories, setCategories] = useState<QueueCategory[]>([])
-  const [step, setStep] = useState<KioskStep>('select')
-
-  // Selected category
+  const [ticketStep, setTicketStep] = useState<TicketStep>('select')
   const [selectedCat, setSelectedCat] = useState<QueueCategory | null>(null)
-
-  // Question flow
-  const [questions, setQuestions] = useState<KioskQuestion[]>([])
+  const [kioskQuestions, setKioskQuestions] = useState<KioskQuestion[]>([])
   const [questionIndex, setQuestionIndex] = useState(0)
   const [answers, setAnswers] = useState<KioskAnswer[]>([])
   const [textInput, setTextInput] = useState('')
-
-  // Ticket result
   const [ticketNumber, setTicketNumber] = useState('')
   const [estimatedWaitMinutes, setEstimatedWaitMinutes] = useState<number | null>(null)
-  const [waitingAhead, setWaitingAhead] = useState<number>(0)
+  const [waitingAhead, setWaitingAhead] = useState(0)
 
-  // Countdown
+  // ── Feedback state ───────────────────────────────────────────────────────
+  const [feedbackQuestions, setFeedbackQuestions] = useState<FeedbackQuestion[]>([])
+  const [feedbackStep, setFeedbackStep] = useState<FeedbackStep>('questions')
+  const [feedbackIndex, setFeedbackIndex] = useState(0)
+  const [feedbackAnswers, setFeedbackAnswers] = useState<FeedbackAnswerItem[]>([])
+  const [feedbackText, setFeedbackText] = useState('')
+  const [submittingFeedback, setSubmittingFeedback] = useState(false)
+
+  // ── Shared ───────────────────────────────────────────────────────────────
   const [countdown, setCountdown] = useState(RESET_SECONDS)
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [time, setTime] = useState(new Date())
+
+  const lang = config?.language ?? 'en'
+  const sw = lang === 'sw'
+
+  const T = {
+    welcome:      sw ? 'Karibu' : 'Welcome',
+    takeTicket:   sw ? 'Chukua Tiketi' : 'Take a Ticket',
+    leaveFeedback: sw ? 'Toa Maoni' : 'Leave Feedback',
+    ticketDesc:   sw ? 'Subiri huduma yako' : 'Get in queue for your service',
+    feedbackDesc: sw ? 'Tuambie kuhusu huduma uliyopata' : 'Tell us about your experience',
+    selectService: sw ? 'Chagua huduma' : 'Select a service',
+    yourTicket:   sw ? 'Nambari Yako' : 'Your Ticket',
+    pleaseWait:   sw ? 'Tafadhali subiri kuitwa' : 'Please wait to be called',
+    resetting:    sw ? 'Inarudi katika' : 'Resetting in',
+    back:         sw ? 'Rudi' : 'Back',
+    next:         sw ? 'Endelea' : 'Next',
+    skip:         sw ? 'Ruka' : 'Skip',
+    aheadOf:      sw ? 'mbele yako' : 'ahead of you',
+    estWait:      sw ? 'muda wa kusubiri' : 'est. wait',
+    question:     sw ? 'Swali' : 'Question',
+    typeAnswer:   sw ? 'Andika jibu lako...' : 'Type your answer...',
+    thankyou:     sw ? 'Asante!' : 'Thank you!',
+    feedbackSent: sw ? 'Maoni yako yamepokelewa. Tutajaribu kuboresha huduma zetu.' : 'Your feedback has been received. We\'ll work to improve our service.',
+    howWasExp:    sw ? 'Je, ulikuwa na uzoefu gani leo?' : 'How was your experience today?',
+  }
 
   // Clock
-  const [time, setTime] = useState(new Date())
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000)
     return () => clearInterval(t)
   }, [])
 
-  // Load categories
+  // Load categories + feedback questions
   useEffect(() => {
     window.api.categories.list().then((cats) => setCategories(cats as QueueCategory[]))
+    window.api.feedback.listQuestions().then((qs) => setFeedbackQuestions(qs as FeedbackQuestion[]))
   }, [])
 
-  const lang = config?.language ?? 'en'
-
-  const T = {
-    welcome:   lang === 'sw' ? 'Karibu' : 'Welcome',
-    subtitle:  lang === 'sw' ? 'Chagua huduma unayohitaji' : 'Select the service you need',
-    take:      lang === 'sw' ? 'Chukua Tiketi' : 'Take a Ticket',
-    yourTicket: lang === 'sw' ? 'Nambari Yako' : 'Your Ticket',
-    pleaseWait: lang === 'sw' ? 'Tafadhali subiri kuitwa' : 'Please wait to be called',
-    resetting:  lang === 'sw' ? 'Inarudi katika' : 'Resetting in',
-    back:       lang === 'sw' ? 'Rudi' : 'Back',
-    next:       lang === 'sw' ? 'Endelea' : 'Next',
-    confirm:    lang === 'sw' ? 'Thibitisha' : 'Confirm',
-    aheadOf:    lang === 'sw' ? 'mbele yako' : 'ahead of you',
-    estWait:    lang === 'sw' ? 'muda wa kusubiri' : 'est. wait',
-    typeAnswer: lang === 'sw' ? 'Andika jibu lako...' : 'Type your answer...',
-  }
-
-  function resetToStart() {
-    if (countdownRef.current) clearInterval(countdownRef.current)
-    setStep('select')
-    setSelectedCat(null)
-    setQuestions([])
-    setQuestionIndex(0)
-    setAnswers([])
-    setTextInput('')
-    setTicketNumber('')
-    setEstimatedWaitMinutes(null)
-    setWaitingAhead(0)
-    setCountdown(RESET_SECONDS)
-  }
-
-  function startCountdown() {
+  // ── Countdown ────────────────────────────────────────────────────────────
+  function startCountdown(onDone?: () => void) {
     setCountdown(RESET_SECONDS)
     countdownRef.current = setInterval(() => {
       setCountdown((c) => {
         if (c <= 1) {
           clearInterval(countdownRef.current!)
-          resetToStart()
+          onDone ? onDone() : resetAll()
           return RESET_SECONDS
         }
         return c - 1
@@ -88,90 +107,96 @@ export default function KioskPage() {
     }, 1000)
   }
 
-  // ── Category selected ───────────────────────────────────────────────────────
-  async function handleCategoryTap(cat: QueueCategory) {
-    if (step !== 'select') return
-    setSelectedCat(cat)
+  function stopCountdown() {
+    if (countdownRef.current) { clearInterval(countdownRef.current); countdownRef.current = null }
+  }
 
+  function resetAll() {
+    stopCountdown()
+    setMode('home')
+    setTicketStep('select')
+    setSelectedCat(null)
+    setKioskQuestions([])
+    setQuestionIndex(0)
+    setAnswers([])
+    setTextInput('')
+    setTicketNumber('')
+    setEstimatedWaitMinutes(null)
+    setWaitingAhead(0)
+    setFeedbackStep('questions')
+    setFeedbackIndex(0)
+    setFeedbackAnswers([])
+    setFeedbackText('')
+    setCountdown(RESET_SECONDS)
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // TICKET FLOW
+  // ══════════════════════════════════════════════════════════════════════════
+
+  async function handleCategoryTap(cat: QueueCategory) {
+    setSelectedCat(cat)
     const qs = await window.api.kioskQuestions.list(cat.id) as KioskQuestion[]
     if (qs.length === 0) {
-      // No questions — go straight to issuing
       await issueTicket(cat, [])
     } else {
-      setQuestions(qs)
+      setKioskQuestions(qs)
       setQuestionIndex(0)
       setAnswers([])
       setTextInput('')
-      setStep('questions')
+      setTicketStep('questions')
     }
   }
 
-  // ── Filter visible questions based on answers so far ────────────────────────
-  function visibleQuestions(allQs: KioskQuestion[], currentAnswers: KioskAnswer[]): KioskQuestion[] {
+  function visibleKioskQuestions(allQs: KioskQuestion[], currentAnswers: KioskAnswer[]) {
     return allQs.filter(q => {
       if (!q.dependsOnQuestionId) return true
       const dep = currentAnswers.find(a => a.questionId === q.dependsOnQuestionId)
       if (!dep) return false
-      if (q.dependsOnOptionId && dep.optionId !== q.dependsOnOptionId) return false
-      return true
+      return !q.dependsOnOptionId || dep.optionId === q.dependsOnOptionId
     })
   }
 
-  // ── Handle answer for current question ─────────────────────────────────────
   function handleOptionSelect(q: KioskQuestion, opt: { id: string; label: string; routesToWindowId?: string }) {
-    const answer: KioskAnswer = {
-      questionId: q.id,
-      question: q.question,
-      optionId: opt.id,
-      value: opt.label,
-      routesToWindowId: opt.routesToWindowId,
-    }
-    const newAnswers = [...answers.filter(a => a.questionId !== q.id), answer]
-    advanceOrIssue(newAnswers)
+    const answer: KioskAnswer = { questionId: q.id, question: q.question, optionId: opt.id, value: opt.label, routesToWindowId: opt.routesToWindowId }
+    advanceKiosk([...answers.filter(a => a.questionId !== q.id), answer])
   }
 
-  function handleTextNext() {
+  function handleKioskTextNext() {
     if (!selectedCat) return
-    const q = visibleQuestions(questions, answers)[questionIndex]
+    const q = visibleKioskQuestions(kioskQuestions, answers)[questionIndex]
     if (!q) return
-    const answer: KioskAnswer = {
-      questionId: q.id,
-      question: q.question,
-      value: textInput.trim() || '—',
-    }
-    const newAnswers = [...answers.filter(a => a.questionId !== q.id), answer]
-    advanceOrIssue(newAnswers)
+    const answer: KioskAnswer = { questionId: q.id, question: q.question, value: textInput.trim() || '—' }
+    advanceKiosk([...answers.filter(a => a.questionId !== q.id), answer])
   }
 
-  function advanceOrIssue(newAnswers: KioskAnswer[]) {
+  function advanceKiosk(newAnswers: KioskAnswer[]) {
     if (!selectedCat) return
     setAnswers(newAnswers)
-    const visible = visibleQuestions(questions, newAnswers)
-    const nextIndex = questionIndex + 1
-    if (nextIndex < visible.length) {
-      setQuestionIndex(nextIndex)
+    const visible = visibleKioskQuestions(kioskQuestions, newAnswers)
+    if (questionIndex + 1 < visible.length) {
+      setQuestionIndex(questionIndex + 1)
       setTextInput('')
     } else {
       issueTicket(selectedCat, newAnswers)
     }
   }
 
-  function handleBack() {
+  function handleKioskBack() {
     if (questionIndex === 0) {
-      resetToStart()
+      setTicketStep('select')
     } else {
       setQuestionIndex(questionIndex - 1)
       setTextInput('')
     }
   }
 
-  // ── Issue ticket ────────────────────────────────────────────────────────────
   async function issueTicket(cat: QueueCategory, collectedAnswers: KioskAnswer[]) {
-    setStep('issuing')
+    setTicketStep('issuing')
     try {
       const waitInfo = await window.api.stats.waitTime(cat.id).catch(() => null)
       const ahead = waitInfo?.waitingAhead ?? 0
-      const waitMins = waitInfo ? Math.ceil((ahead * waitInfo.avgServiceSeconds) / 60) : null
+      const waitMins = waitInfo ? Math.ceil((ahead * (waitInfo as any).avgServiceSeconds) / 60) : null
       setWaitingAhead(ahead)
       setEstimatedWaitMinutes(waitMins)
 
@@ -180,40 +205,83 @@ export default function KioskPage() {
       const id = generateId()
       const createdAt = new Date().toISOString()
 
-      await window.api.tickets.create({
-        id,
-        displayNumber,
-        sequenceNumber: seq,
-        categoryId: cat.id,
-        createdAt,
-        answers: collectedAnswers,
-      })
+      await window.api.tickets.create({ id, displayNumber, sequenceNumber: seq, categoryId: cat.id, createdAt, answers: collectedAnswers })
 
       window.api.print.ticket({
-        displayNumber,
-        categoryLabel: cat.label,
+        displayNumber, categoryLabel: cat.label,
         organizationName: config?.organizationName ?? 'Announcement System',
-        issuedAt: createdAt,
-        windowCount: config?.windowCount ?? 1,
-        waitingAhead: ahead,
-        estimatedWaitMinutes: waitMins ?? undefined,
+        issuedAt: createdAt, windowCount: config?.windowCount ?? 1,
+        waitingAhead: ahead, estimatedWaitMinutes: waitMins ?? undefined,
         answers: collectedAnswers,
       }).catch((e) => console.error('[print]', e))
 
       setTicketNumber(displayNumber)
-      setStep('done')
+      setTicketStep('done')
       startCountdown()
-    } catch {
-      resetToStart()
+    } catch { resetAll() }
+  }
+
+  const visibleKioskQs = visibleKioskQuestions(kioskQuestions, answers)
+  const currentKioskQ = visibleKioskQs[questionIndex] ?? null
+  const kioskProgress = visibleKioskQs.length > 0 ? (questionIndex / visibleKioskQs.length) * 100 : 0
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // FEEDBACK FLOW
+  // ══════════════════════════════════════════════════════════════════════════
+
+  function enterFeedback() {
+    setFeedbackStep('questions')
+    setFeedbackIndex(0)
+    setFeedbackAnswers([])
+    setFeedbackText('')
+    setMode('feedback')
+  }
+
+  const currentFeedbackQ = feedbackQuestions[feedbackIndex] ?? null
+  const feedbackProgress = feedbackQuestions.length > 0 ? (feedbackIndex / feedbackQuestions.length) * 100 : 0
+
+  function recordFeedbackAnswer(answer: FeedbackAnswerItem) {
+    const newAnswers = [...feedbackAnswers.filter(a => a.questionId !== answer.questionId), answer]
+    setFeedbackAnswers(newAnswers)
+    if (feedbackIndex + 1 < feedbackQuestions.length) {
+      setFeedbackIndex(feedbackIndex + 1)
+      setFeedbackText('')
+    } else {
+      submitFeedback(newAnswers)
     }
   }
 
-  // ── Derived: current visible question ───────────────────────────────────────
-  const visibleQs = visibleQuestions(questions, answers)
-  const currentQ = visibleQs[questionIndex] ?? null
-  const progressPct = visibleQs.length > 0 ? ((questionIndex) / visibleQs.length) * 100 : 0
+  function handleFeedbackSkip() {
+    if (feedbackIndex + 1 < feedbackQuestions.length) {
+      setFeedbackIndex(feedbackIndex + 1)
+      setFeedbackText('')
+    } else {
+      submitFeedback(feedbackAnswers)
+    }
+  }
 
-  // ─────────────────────────────────────────────────────────────────────────────
+  function handleFeedbackBack() {
+    if (feedbackIndex === 0) {
+      resetAll()
+    } else {
+      setFeedbackIndex(feedbackIndex - 1)
+      setFeedbackText('')
+    }
+  }
+
+  async function submitFeedback(collectedAnswers: FeedbackAnswerItem[]) {
+    setSubmittingFeedback(true)
+    try {
+      await window.api.feedback.submit({ answers: collectedAnswers })
+    } catch { /* best-effort */ }
+    setSubmittingFeedback(false)
+    setFeedbackStep('thankyou')
+    startCountdown(resetAll)
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // RENDER
+  // ══════════════════════════════════════════════════════════════════════════
 
   return (
     <div className="flex flex-col h-screen bg-[#0a0a0f] text-white overflow-hidden select-none cursor-default">
@@ -227,175 +295,154 @@ export default function KioskPage() {
         <p className="text-4xl font-bold tabular-nums text-zinc-100">{formatTime(time)}</p>
       </header>
 
-      {/* Body */}
       <main className="flex-1 flex flex-col items-center justify-center px-10 py-8 overflow-hidden">
 
-        {/* ── STEP: Category selection ──────────────────────────────────────── */}
-        {step === 'select' && (
-          <div className="w-full max-w-4xl">
-            <div className="text-center mb-10">
-              <p className="text-4xl font-bold text-zinc-100 mb-2">{T.take}</p>
-              <p className="text-zinc-500 text-lg">{T.subtitle}</p>
-            </div>
+        {/* ══ HOME ══════════════════════════════════════════════════════════ */}
+        {mode === 'home' && (
+          <div className="w-full max-w-2xl space-y-5">
+            <p className="text-center text-zinc-400 text-lg mb-8">
+              {sw ? 'Ungependa kufanya nini?' : 'What would you like to do?'}
+            </p>
+            <div className="grid grid-cols-2 gap-5">
+              {/* Take a Ticket */}
+              <button
+                onClick={() => setMode('ticket')}
+                className="group rounded-3xl border-2 border-indigo-500/40 bg-indigo-500/10 hover:bg-indigo-500/20 hover:border-indigo-500/70 active:scale-95 transition-all duration-200 p-8 text-center flex flex-col items-center gap-4"
+              >
+                <div className="w-20 h-20 rounded-2xl bg-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-600/30">
+                  <Ticket className="w-10 h-10 text-white" />
+                </div>
+                <div>
+                  <p className="text-xl font-bold text-zinc-100">{T.takeTicket}</p>
+                  <p className="text-sm text-zinc-500 mt-1">{T.ticketDesc}</p>
+                </div>
+              </button>
 
-            <div className={cn(
-              'grid gap-5',
+              {/* Leave Feedback */}
+              <button
+                onClick={enterFeedback}
+                className="group rounded-3xl border-2 border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 hover:border-amber-500/70 active:scale-95 transition-all duration-200 p-8 text-center flex flex-col items-center gap-4"
+              >
+                <div className="w-20 h-20 rounded-2xl bg-amber-600 flex items-center justify-center shadow-lg shadow-amber-600/30">
+                  <Star className="w-10 h-10 text-white" />
+                </div>
+                <div>
+                  <p className="text-xl font-bold text-zinc-100">{T.leaveFeedback}</p>
+                  <p className="text-sm text-zinc-500 mt-1">{T.feedbackDesc}</p>
+                </div>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ══ TICKET FLOW ══════════════════════════════════════════════════ */}
+
+        {/* Category selection */}
+        {mode === 'ticket' && ticketStep === 'select' && (
+          <div className="w-full max-w-4xl">
+            <div className="text-center mb-8">
+              <p className="text-4xl font-bold text-zinc-100 mb-2">{T.takeTicket}</p>
+              <p className="text-zinc-500 text-lg">{T.selectService}</p>
+            </div>
+            <div className={cn('grid gap-5',
               categories.length <= 2 ? 'grid-cols-2' :
-              categories.length <= 4 ? 'grid-cols-2' :
-              'grid-cols-3'
+              categories.length <= 4 ? 'grid-cols-2' : 'grid-cols-3'
             )}>
               {categories.map((cat) => (
-                <button
-                  key={cat.id}
-                  onClick={() => handleCategoryTap(cat)}
-                  className="group rounded-3xl border-2 p-8 text-center transition-all duration-200 active:scale-95 hover:scale-[1.02]"
-                  style={{ borderColor: `${cat.color}55`, backgroundColor: `${cat.color}15` }}
-                >
-                  <div
-                    className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 text-2xl font-black text-white"
-                    style={{ backgroundColor: cat.color }}
-                  >
+                <button key={cat.id} onClick={() => handleCategoryTap(cat)}
+                  className="rounded-3xl border-2 p-8 text-center transition-all duration-200 active:scale-95 hover:scale-[1.02]"
+                  style={{ borderColor: `${cat.color}55`, backgroundColor: `${cat.color}15` }}>
+                  <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 text-2xl font-black text-white" style={{ backgroundColor: cat.color }}>
                     {cat.code}
                   </div>
                   <p className="text-xl font-bold text-zinc-100">{cat.label}</p>
                   <p className="text-sm text-zinc-500 mt-1">{cat.prefix}001 ···</p>
                 </button>
               ))}
+              {categories.length === 0 && <p className="col-span-3 text-center text-zinc-600 text-xl mt-8">No services configured</p>}
             </div>
-
-            {categories.length === 0 && (
-              <p className="text-center text-zinc-600 text-xl mt-8">No services configured</p>
-            )}
+            <button onClick={() => setMode('home')} className="flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-300 transition-colors mx-auto mt-8">
+              <ChevronLeft className="w-4 h-4" /> {T.back}
+            </button>
           </div>
         )}
 
-        {/* ── STEP: Questions ───────────────────────────────────────────────── */}
-        {step === 'questions' && currentQ && (
+        {/* Kiosk questions */}
+        {mode === 'ticket' && ticketStep === 'questions' && currentKioskQ && (
           <div className="w-full max-w-xl flex flex-col gap-6">
-
-            {/* Progress bar */}
             <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-              <div
-                className="h-full rounded-full transition-all duration-500"
-                style={{
-                  width: `${progressPct}%`,
-                  backgroundColor: selectedCat?.color ?? '#4F46E5',
-                }}
-              />
+              <div className="h-full rounded-full transition-all duration-500" style={{ width: `${kioskProgress}%`, backgroundColor: selectedCat?.color ?? '#4F46E5' }} />
             </div>
-
-            {/* Step indicator */}
             <p className="text-center text-xs text-zinc-500 -mt-2 uppercase tracking-widest">
-              {lang === 'sw' ? 'Swali' : 'Question'} {questionIndex + 1} / {visibleQs.length}
+              {T.question} {questionIndex + 1} / {visibleKioskQs.length}
             </p>
-
-            {/* Category chip */}
             {selectedCat && (
               <div className="flex justify-center">
-                <span
-                  className="inline-flex items-center gap-2 text-sm font-semibold px-4 py-1.5 rounded-full"
-                  style={{ backgroundColor: `${selectedCat.color}20`, color: selectedCat.color, border: `1px solid ${selectedCat.color}40` }}
-                >
+                <span className="inline-flex items-center gap-2 text-sm font-semibold px-4 py-1.5 rounded-full"
+                  style={{ backgroundColor: `${selectedCat.color}20`, color: selectedCat.color, border: `1px solid ${selectedCat.color}40` }}>
                   {selectedCat.label}
                 </span>
               </div>
             )}
-
-            {/* Question text */}
-            <h2 className="text-2xl font-bold text-zinc-100 text-center leading-snug">
-              {currentQ.question}
-            </h2>
-
-            {/* Options — single choice */}
-            {currentQ.type === 'single' && (
+            <h2 className="text-2xl font-bold text-zinc-100 text-center leading-snug">{currentKioskQ.question}</h2>
+            {currentKioskQ.type === 'single' && (
               <div className="grid gap-3">
-                {currentQ.options.map(opt => (
-                  <button
-                    key={opt.id}
-                    onClick={() => handleOptionSelect(currentQ, opt)}
-                    className="w-full rounded-2xl border border-zinc-700 bg-zinc-900/60 hover:border-zinc-500 hover:bg-zinc-800/60 active:scale-[0.98] px-6 py-4 text-left text-base font-medium text-zinc-100 transition-all duration-150 flex items-center justify-between group"
-                  >
+                {currentKioskQ.options.map(opt => (
+                  <button key={opt.id} onClick={() => handleOptionSelect(currentKioskQ, opt)}
+                    className="w-full rounded-2xl border border-zinc-700 bg-zinc-900/60 hover:border-zinc-500 hover:bg-zinc-800/60 active:scale-[0.98] px-6 py-4 text-left text-base font-medium text-zinc-100 transition-all duration-150 flex items-center justify-between group">
                     <span>{opt.label}</span>
                     <ChevronRight className="w-4 h-4 text-zinc-600 group-hover:text-zinc-300 transition-colors" />
                   </button>
                 ))}
               </div>
             )}
-
-            {/* Text input */}
-            {currentQ.type === 'text' && (
+            {currentKioskQ.type === 'text' && (
               <div className="flex flex-col gap-3">
-                <input
-                  type="text"
-                  value={textInput}
-                  onChange={e => setTextInput(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter' && textInput.trim()) handleTextNext() }}
-                  placeholder={T.typeAnswer}
-                  autoFocus
-                  className="w-full rounded-2xl border border-zinc-700 bg-zinc-900/60 px-6 py-4 text-lg text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
-                />
-                <button
-                  onClick={handleTextNext}
-                  disabled={!textInput.trim()}
-                  className="w-full rounded-2xl py-4 text-base font-semibold transition-all duration-150 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                  style={{
-                    backgroundColor: selectedCat?.color ?? '#4F46E5',
-                    opacity: textInput.trim() ? 1 : undefined,
-                  }}
-                >
+                <input type="text" value={textInput} onChange={e => setTextInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && textInput.trim()) handleKioskTextNext() }}
+                  placeholder={T.typeAnswer} autoFocus
+                  className="w-full rounded-2xl border border-zinc-700 bg-zinc-900/60 px-6 py-4 text-lg text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors" />
+                <button onClick={handleKioskTextNext} disabled={!textInput.trim()}
+                  className="w-full rounded-2xl py-4 text-base font-semibold disabled:opacity-30 flex items-center justify-center gap-2"
+                  style={{ backgroundColor: selectedCat?.color ?? '#4F46E5' }}>
                   {T.next} <ChevronRight className="w-5 h-5" />
                 </button>
               </div>
             )}
-
-            {/* Back button */}
-            <button
-              onClick={handleBack}
-              className="flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-300 transition-colors mx-auto mt-2"
-            >
+            <button onClick={handleKioskBack} className="flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-300 transition-colors mx-auto mt-2">
               <ChevronLeft className="w-4 h-4" /> {T.back}
             </button>
           </div>
         )}
 
-        {/* ── STEP: Issuing ─────────────────────────────────────────────────── */}
-        {step === 'issuing' && (
+        {/* Issuing */}
+        {mode === 'ticket' && ticketStep === 'issuing' && (
           <div className="flex flex-col items-center gap-6 animate-pulse">
             <div className="w-24 h-24 rounded-full border-4 border-zinc-700 flex items-center justify-center">
               <div className="w-10 h-10 border-4 border-zinc-400 border-t-transparent rounded-full animate-spin" />
             </div>
-            <p className="text-2xl text-zinc-400">
-              {lang === 'sw' ? 'Inatoa tiketi...' : 'Issuing ticket...'}
-            </p>
+            <p className="text-2xl text-zinc-400">{sw ? 'Inatoa tiketi...' : 'Issuing ticket...'}</p>
           </div>
         )}
 
-        {/* ── STEP: Done ────────────────────────────────────────────────────── */}
-        {step === 'done' && (
+        {/* Done — ticket issued */}
+        {mode === 'ticket' && ticketStep === 'done' && (
           <div className="flex flex-col items-center text-center w-full max-w-lg">
             <p className="text-zinc-500 text-xl uppercase tracking-widest mb-2">{selectedCat?.label}</p>
-            <p className="text-zinc-400 text-lg mb-6">{T.yourTicket}</p>
-
-            {/* Big ticket number */}
-            <div
-              className="rounded-3xl px-20 py-10 mb-6 shadow-2xl"
+            <p className="text-zinc-400 text-lg mb-5">{T.yourTicket}</p>
+            <div className="rounded-3xl px-20 py-10 mb-6 shadow-2xl"
               style={{
                 background: `linear-gradient(135deg, ${selectedCat?.color ?? '#4F46E5'}20, ${selectedCat?.color ?? '#4F46E5'}35)`,
                 border: `3px solid ${selectedCat?.color ?? '#4F46E5'}66`,
                 boxShadow: `0 0 80px ${selectedCat?.color ?? '#4F46E5'}30`,
-              }}
-            >
-              <p
-                className="font-black tracking-tight text-white leading-none"
-                style={{ fontSize: 'clamp(5rem, 18vw, 11rem)', color: selectedCat?.color ?? '#4F46E5' }}
-              >
+              }}>
+              <p className="font-black tracking-tight leading-none"
+                style={{ fontSize: 'clamp(5rem, 18vw, 11rem)', color: selectedCat?.color ?? '#4F46E5' }}>
                 {ticketNumber}
               </p>
             </div>
-
-            {/* Answers summary */}
             {answers.length > 0 && (
-              <div className="w-full rounded-2xl border border-zinc-800 bg-zinc-900/40 px-5 py-4 mb-6 text-left space-y-2">
+              <div className="w-full rounded-2xl border border-zinc-800 bg-zinc-900/40 px-5 py-4 mb-5 text-left space-y-2">
                 {answers.map((a) => (
                   <div key={a.questionId} className="flex items-start gap-3">
                     <span className="text-xs text-zinc-600 mt-0.5 flex-shrink-0">◆</span>
@@ -407,10 +454,8 @@ export default function KioskPage() {
                 ))}
               </div>
             )}
-
-            {/* Wait estimate */}
             {estimatedWaitMinutes !== null && (
-              <div className="flex items-center gap-6 mb-6">
+              <div className="flex items-center gap-6 mb-5">
                 <div className="text-center">
                   <p className="text-4xl font-extrabold tabular-nums text-zinc-100">{waitingAhead}</p>
                   <p className="text-xs text-zinc-500 mt-1 uppercase tracking-wide">{T.aheadOf}</p>
@@ -425,23 +470,130 @@ export default function KioskPage() {
                 </div>
               </div>
             )}
-
-            <p className="text-zinc-400 text-xl mb-6">{T.pleaseWait}</p>
-
-            {/* Countdown bar */}
+            <p className="text-zinc-400 text-xl mb-5">{T.pleaseWait}</p>
             <div className="flex flex-col items-center gap-3">
               <div className="w-48 h-2 bg-zinc-800 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-zinc-500 rounded-full transition-all duration-1000"
-                  style={{ width: `${(countdown / RESET_SECONDS) * 100}%` }}
-                />
+                <div className="h-full bg-zinc-500 rounded-full transition-all duration-1000" style={{ width: `${(countdown / RESET_SECONDS) * 100}%` }} />
               </div>
-              <p className="text-xs text-zinc-600">
-                {T.resetting} {countdown}s
-              </p>
+              <p className="text-xs text-zinc-600">{T.resetting} {countdown}s</p>
             </div>
           </div>
         )}
+
+        {/* ══ FEEDBACK FLOW ════════════════════════════════════════════════ */}
+
+        {/* No questions configured */}
+        {mode === 'feedback' && feedbackQuestions.length === 0 && (
+          <div className="flex flex-col items-center gap-6 text-center">
+            <MessageSquare className="w-16 h-16 text-zinc-700" />
+            <p className="text-zinc-400 text-xl">{sw ? 'Maswali ya maoni hayajaundwa.' : 'No feedback questions configured yet.'}</p>
+            <button onClick={resetAll} className="flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-300 transition-colors">
+              <ChevronLeft className="w-4 h-4" /> {T.back}
+            </button>
+          </div>
+        )}
+
+        {/* Feedback questions */}
+        {mode === 'feedback' && feedbackStep === 'questions' && currentFeedbackQ && (
+          <div className="w-full max-w-xl flex flex-col gap-6">
+            {/* Progress */}
+            <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+              <div className="h-full bg-amber-500 rounded-full transition-all duration-500" style={{ width: `${feedbackProgress}%` }} />
+            </div>
+            <p className="text-center text-xs text-zinc-500 -mt-2 uppercase tracking-widest">
+              {T.question} {feedbackIndex + 1} / {feedbackQuestions.length}
+            </p>
+
+            <h2 className="text-2xl font-bold text-zinc-100 text-center leading-snug">{currentFeedbackQ.question}</h2>
+
+            {/* Star rating */}
+            {currentFeedbackQ.type === 'star' && (
+              <div className="flex justify-center gap-4">
+                {[1, 2, 3, 4, 5].map(score => (
+                  <button key={score} onClick={() => recordFeedbackAnswer({ questionId: currentFeedbackQ.id, question: currentFeedbackQ.question, type: 'star', score })}
+                    className="text-6xl transition-transform active:scale-90 hover:scale-110 duration-150 hover:drop-shadow-lg">
+                    ⭐
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Emoji rating */}
+            {currentFeedbackQ.type === 'emoji' && (
+              <div className="flex justify-center gap-3">
+                {EMOJI_OPTIONS.map(opt => (
+                  <button key={opt.score} onClick={() => recordFeedbackAnswer({ questionId: currentFeedbackQ.id, question: currentFeedbackQ.question, type: 'emoji', score: opt.score, value: opt.label })}
+                    className="flex flex-col items-center gap-2 p-3 rounded-2xl border border-zinc-700 bg-zinc-900/60 hover:border-zinc-500 hover:bg-zinc-800/60 active:scale-95 transition-all duration-150 min-w-[72px]">
+                    <span className="text-5xl">{opt.emoji}</span>
+                    <span className="text-xs text-zinc-500">{opt.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Choice */}
+            {currentFeedbackQ.type === 'choice' && (
+              <div className="grid gap-3">
+                {currentFeedbackQ.options.map((opt: string) => (
+                  <button key={opt} onClick={() => recordFeedbackAnswer({ questionId: currentFeedbackQ.id, question: currentFeedbackQ.question, type: 'choice', value: opt })}
+                    className="w-full rounded-2xl border border-zinc-700 bg-zinc-900/60 hover:border-zinc-500 hover:bg-zinc-800/60 active:scale-[0.98] px-6 py-4 text-left text-base font-medium text-zinc-100 transition-all flex items-center justify-between group">
+                    <span>{opt}</span>
+                    <ChevronRight className="w-4 h-4 text-zinc-600 group-hover:text-zinc-300 transition-colors" />
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Free text */}
+            {currentFeedbackQ.type === 'text' && (
+              <div className="flex flex-col gap-3">
+                <textarea value={feedbackText} onChange={e => setFeedbackText(e.target.value)}
+                  placeholder={T.typeAnswer} rows={3} autoFocus
+                  className="w-full rounded-2xl border border-zinc-700 bg-zinc-900/60 px-6 py-4 text-base text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition-colors resize-none" />
+                <button onClick={() => {
+                  if (feedbackText.trim()) {
+                    recordFeedbackAnswer({ questionId: currentFeedbackQ.id, question: currentFeedbackQ.question, type: 'text', value: feedbackText.trim() })
+                  }
+                }} disabled={!feedbackText.trim()}
+                  className="w-full rounded-2xl py-4 bg-amber-600 hover:bg-amber-500 disabled:opacity-30 text-base font-semibold flex items-center justify-center gap-2 transition-colors">
+                  {T.next} <ChevronRight className="w-5 h-5" />
+                </button>
+              </div>
+            )}
+
+            {/* Skip + back */}
+            <div className="flex items-center justify-between">
+              <button onClick={handleFeedbackBack} className="flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-300 transition-colors">
+                <ChevronLeft className="w-4 h-4" /> {T.back}
+              </button>
+              {!currentFeedbackQ.isRequired && (
+                <button onClick={handleFeedbackSkip} className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors">
+                  {T.skip} →
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Thank you screen */}
+        {mode === 'feedback' && feedbackStep === 'thankyou' && (
+          <div className="flex flex-col items-center text-center gap-6">
+            <div className="w-24 h-24 rounded-full bg-amber-500/20 border-2 border-amber-500/40 flex items-center justify-center">
+              <span className="text-5xl">🙏</span>
+            </div>
+            <div>
+              <p className="text-4xl font-bold text-zinc-100 mb-3">{T.thankyou}</p>
+              <p className="text-zinc-400 text-lg max-w-sm">{T.feedbackSent}</p>
+            </div>
+            <div className="flex flex-col items-center gap-3 mt-4">
+              <div className="w-48 h-2 bg-zinc-800 rounded-full overflow-hidden">
+                <div className="h-full bg-amber-500 rounded-full transition-all duration-1000" style={{ width: `${(countdown / RESET_SECONDS) * 100}%` }} />
+              </div>
+              <p className="text-xs text-zinc-600">{T.resetting} {countdown}s</p>
+            </div>
+          </div>
+        )}
+
       </main>
     </div>
   )

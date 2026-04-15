@@ -8,12 +8,13 @@ import {
   ArrowLeft, Plus, Pencil, Trash2, Save, X, Loader2,
   Building2, Monitor, Layers, Printer, Volume2, AlertTriangle, Globe, Music2,
   Film, GripVertical, FolderOpen, Users, Eye, EyeOff, ShieldCheck,
-  HelpCircle, ChevronUp, ChevronDown, ToggleLeft, ToggleRight, GitBranch
+  HelpCircle, ChevronUp, ChevronDown, ToggleLeft, ToggleRight, GitBranch,
+  Star, MessageSquare
 } from 'lucide-react'
 import { WebSpeechProvider, PiperProvider, buildAnnouncementText } from '@announcement/audio-engine'
-import type { UserRole, SystemUser, KioskQuestion } from '@announcement/shared'
+import type { UserRole, SystemUser, KioskQuestion, FeedbackQuestion } from '@announcement/shared'
 
-type Tab = 'org' | 'audio' | 'categories' | 'windows' | 'printer' | 'broadcast' | 'server' | 'media' | 'users' | 'kiosk'
+type Tab = 'org' | 'audio' | 'categories' | 'windows' | 'printer' | 'broadcast' | 'server' | 'media' | 'users' | 'kiosk' | 'feedback'
 
 const COLORS = [
   '#4F46E5', '#0EA5E9', '#10B981', '#F59E0B',
@@ -302,6 +303,7 @@ export default function SettingsPage() {
     { id: 'windows', label: 'Windows', icon: Monitor },
     { id: 'users', label: 'Staff & Roles', icon: Users },
     { id: 'kiosk', label: 'Kiosk Flow', icon: HelpCircle },
+    { id: 'feedback', label: 'Feedback', icon: Star },
     { id: 'printer', label: 'Printer', icon: Printer },
     { id: 'broadcast', label: 'Emergency', icon: AlertTriangle },
     { id: 'server', label: 'Server', icon: Globe },
@@ -994,6 +996,9 @@ export default function SettingsPage() {
         {/* ── Kiosk Flow ────────────────────────────────────────────────────── */}
         {tab === 'kiosk' && <KioskFlowTab />}
 
+        {/* ── Feedback ──────────────────────────────────────────────────────── */}
+        {tab === 'feedback' && <FeedbackTab />}
+
         {/* ── Staff & Roles ─────────────────────────────────────────────────── */}
         {tab === 'users' && <UsersTab />}
 
@@ -1547,6 +1552,253 @@ function KioskFlowTab() {
                 </div>
               </div>
             )}
+
+            <div className="flex gap-3 pt-2">
+              <button onClick={() => setEditing(null)}
+                className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800/50 py-2.5 text-sm font-medium text-zinc-300 hover:bg-zinc-800 transition-colors">
+                Cancel
+              </button>
+              <button onClick={saveQuestion} disabled={saving}
+                className="flex-1 rounded-lg bg-primary-600 hover:bg-primary-500 disabled:opacity-50 py-2.5 text-sm font-semibold text-white transition-colors flex items-center justify-center gap-2">
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Feedback Tab ─────────────────────────────────────────────────────────────
+
+const FEEDBACK_TYPES: { value: FeedbackQuestion['type']; label: string; desc: string }[] = [
+  { value: 'star',   label: '★ Star Rating',  desc: '1–5 stars' },
+  { value: 'emoji',  label: '😊 Emoji Rating', desc: '5 faces' },
+  { value: 'choice', label: '◉ Choice',        desc: 'Tap an option' },
+  { value: 'text',   label: '⌨ Free Text',     desc: 'Keyboard input' },
+]
+
+function emptyFeedbackQuestion(orderIndex: number): FeedbackQuestion {
+  return {
+    id: crypto.randomUUID(),
+    question: '',
+    type: 'star',
+    options: [],
+    orderIndex,
+    isEnabled: true,
+    isRequired: false,
+    createdAt: new Date().toISOString(),
+  }
+}
+
+function FeedbackTab() {
+  const [questions, setQuestions] = useState<FeedbackQuestion[]>([])
+  const [editing, setEditing] = useState<FeedbackQuestion | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    window.api.feedback.listAllQuestions().then((qs) => setQuestions(qs as FeedbackQuestion[]))
+  }, [])
+
+  async function saveQuestion() {
+    if (!editing) return
+    if (!editing.question.trim()) { setError('Question text is required'); return }
+    if (editing.type === 'choice' && editing.options.filter((o: string) => o.trim()).length < 2) {
+      setError('Add at least 2 options for a choice question'); return
+    }
+    setError('')
+    setSaving(true)
+    try {
+      const cleaned = { ...editing, options: editing.options.filter((o: string) => o.trim()) }
+      const saved = await window.api.feedback.upsertQuestion(cleaned) as FeedbackQuestion
+      setQuestions(prev => {
+        const idx = prev.findIndex(q => q.id === saved.id)
+        return idx >= 0 ? prev.map(q => q.id === saved.id ? saved : q) : [...prev, saved]
+      })
+      setEditing(null)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function deleteQ(id: string) {
+    if (!confirm('Delete this feedback question?')) return
+    await window.api.feedback.deleteQuestion(id)
+    setQuestions(prev => prev.filter(q => q.id !== id))
+  }
+
+  async function toggleEnabled(q: FeedbackQuestion) {
+    const updated = { ...q, isEnabled: !q.isEnabled }
+    await window.api.feedback.upsertQuestion(updated)
+    setQuestions(prev => prev.map(x => x.id === q.id ? updated : x))
+  }
+
+  async function move(id: string, dir: 'up' | 'down') {
+    const idx = questions.findIndex(q => q.id === id)
+    if (dir === 'up' && idx === 0) return
+    if (dir === 'down' && idx === questions.length - 1) return
+    const next = [...questions]
+    const swap = dir === 'up' ? idx - 1 : idx + 1
+    ;[next[idx], next[swap]] = [next[swap], next[idx]]
+    const reindexed = next.map((q, i) => ({ ...q, orderIndex: i }))
+    setQuestions(reindexed)
+    await window.api.feedback.reorderQuestions(reindexed.map(q => q.id))
+  }
+
+  const typeInfo = (t: FeedbackQuestion['type']) => FEEDBACK_TYPES.find(x => x.value === t)
+
+  return (
+    <div className="space-y-6 max-w-2xl">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-zinc-100">Feedback / Maoni</h2>
+          <p className="text-sm text-zinc-500 mt-1">
+            Configure customer satisfaction questions shown on the kiosk feedback screen.
+          </p>
+        </div>
+        <button
+          onClick={() => { setError(''); setEditing(emptyFeedbackQuestion(questions.length)) }}
+          className="flex items-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors"
+        >
+          <Plus className="w-4 h-4" /> Add Question
+        </button>
+      </div>
+
+      {questions.length === 0 && (
+        <div className="rounded-xl border border-dashed border-zinc-700 py-14 text-center">
+          <Star className="w-10 h-10 text-zinc-700 mx-auto mb-3" />
+          <p className="text-zinc-500 text-sm">No feedback questions yet.</p>
+          <p className="text-zinc-600 text-xs mt-1">Add questions like "How was your experience?" with star or emoji rating.</p>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {questions.map((q, idx) => (
+          <div key={q.id} className={cn(
+            'rounded-xl border p-4 transition-colors',
+            q.isEnabled ? 'border-zinc-700 bg-zinc-900/40' : 'border-zinc-800 bg-zinc-900/20 opacity-60'
+          )}>
+            <div className="flex items-start gap-3">
+              <div className="flex flex-col gap-0.5 mt-0.5">
+                <button onClick={() => move(q.id, 'up')} disabled={idx === 0} className="text-zinc-600 hover:text-zinc-300 disabled:opacity-20 transition-colors">
+                  <ChevronUp className="w-3.5 h-3.5" />
+                </button>
+                <button onClick={() => move(q.id, 'down')} disabled={idx === questions.length - 1} className="text-zinc-600 hover:text-zinc-300 disabled:opacity-20 transition-colors">
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap mb-1">
+                  <span className="text-sm font-medium text-zinc-100 truncate">{q.question}</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded font-medium border text-amber-400 bg-amber-500/10 border-amber-500/30">
+                    {typeInfo(q.type)?.label}
+                  </span>
+                  {q.isRequired && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded font-medium border text-red-400 bg-red-500/10 border-red-500/20">Required</span>
+                  )}
+                </div>
+                {q.type === 'choice' && q.options.length > 0 && (
+                  <p className="text-xs text-zinc-500 truncate">{q.options.join(' · ')}</p>
+                )}
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <button onClick={() => toggleEnabled(q)} className="text-zinc-500 hover:text-zinc-200 transition-colors">
+                  {q.isEnabled ? <ToggleRight className="w-4 h-4 text-emerald-400" /> : <ToggleLeft className="w-4 h-4" />}
+                </button>
+                <button onClick={() => { setError(''); setEditing({ ...q }) }} className="text-zinc-500 hover:text-zinc-200 transition-colors">
+                  <Pencil className="w-4 h-4" />
+                </button>
+                <button onClick={() => deleteQ(q.id)} className="text-zinc-500 hover:text-red-400 transition-colors">
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {editing && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-lg bg-zinc-900 border border-zinc-700 rounded-2xl p-6 space-y-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold text-zinc-100">
+                {questions.some(q => q.id === editing.id) ? 'Edit Question' : 'New Feedback Question'}
+              </h3>
+              <button onClick={() => setEditing(null)} className="text-zinc-500 hover:text-zinc-200"><X className="w-4 h-4" /></button>
+            </div>
+
+            {error && <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{error}</p>}
+
+            <div>
+              <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1.5">Question</label>
+              <input
+                value={editing.question}
+                onChange={e => setEditing({ ...editing, question: e.target.value })}
+                placeholder="e.g. How was your experience today?"
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1.5">Answer Type</label>
+              <div className="grid grid-cols-2 gap-2">
+                {FEEDBACK_TYPES.map(t => (
+                  <button key={t.value} onClick={() => setEditing({ ...editing, type: t.value, options: [] })}
+                    className={cn(
+                      'rounded-lg border py-2.5 px-3 text-left transition-colors',
+                      editing.type === t.value
+                        ? 'border-primary-500 bg-primary-500/10 text-primary-400'
+                        : 'border-zinc-700 bg-zinc-800/50 text-zinc-400 hover:border-zinc-600'
+                    )}>
+                    <p className="text-sm font-medium">{t.label}</p>
+                    <p className="text-xs text-zinc-500 mt-0.5">{t.desc}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {editing.type === 'choice' && (
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1.5">Options</label>
+                <div className="space-y-2">
+                  {editing.options.map((opt: string, i: number) => (
+                    <div key={i} className="flex gap-2">
+                      <input
+                        value={opt}
+                        onChange={e => {
+                          const opts = [...editing.options]
+                          opts[i] = e.target.value
+                          setEditing({ ...editing, options: opts })
+                        }}
+                        placeholder={`Option ${i + 1}`}
+                        className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                      />
+                      <button onClick={() => setEditing({ ...editing, options: editing.options.filter((_: string, j: number) => j !== i) })}
+                        className="text-zinc-600 hover:text-red-400 transition-colors"><X className="w-4 h-4" /></button>
+                    </div>
+                  ))}
+                  <button onClick={() => setEditing({ ...editing, options: [...editing.options, ''] })}
+                    className="flex items-center gap-1.5 text-xs text-primary-400 hover:text-primary-300 transition-colors">
+                    <Plus className="w-3.5 h-3.5" /> Add option
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <label className="flex items-center gap-3 cursor-pointer select-none">
+              <div onClick={() => setEditing({ ...editing, isRequired: !editing.isRequired })}
+                className={cn('w-10 h-5 rounded-full transition-colors flex items-center px-0.5 cursor-pointer',
+                  editing.isRequired ? 'bg-primary-600' : 'bg-zinc-700'
+                )}>
+                <div className={cn('w-4 h-4 rounded-full bg-white transition-transform',
+                  editing.isRequired ? 'translate-x-5' : 'translate-x-0'
+                )} />
+              </div>
+              <span className="text-sm text-zinc-300">Required (cannot skip)</span>
+            </label>
 
             <div className="flex gap-3 pt-2">
               <button onClick={() => setEditing(null)}
