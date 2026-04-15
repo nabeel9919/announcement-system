@@ -5,7 +5,7 @@
  */
 import * as http from 'http'
 import * as os from 'os'
-import { randomUUID } from 'crypto'
+import { randomUUID, createHash } from 'crypto'
 import type { BrowserWindow } from 'electron'
 import type Database from 'better-sqlite3'
 import { readLocalConfig, writeLocalConfig } from './license'
@@ -472,6 +472,41 @@ export class LanServer {
       return
     }
 
+    // ── POST /api/auth/login ─────────────────────────────────────────────────
+    if (method === 'POST' && path === '/api/auth/login') {
+      const body = await readBody(req) as { username?: string; password?: string }
+      if (!body.username || !body.password) { reply(400, { error: 'Username and password required' }); return }
+      try {
+        const db   = this.getDb()
+        const hash = createHash('sha256').update(body.password).digest('hex')
+        const row  = db.prepare('SELECT * FROM users WHERE username=? AND is_active=1').get(body.username) as any
+        if (!row || row.password_hash !== hash) {
+          this.recordFailure(ip)
+          reply(401, { error: 'Invalid username or password' })
+          return
+        }
+        this.clearFailures(ip)
+        reply(200, { user: { id: row.id, username: row.username, displayName: row.display_name, role: row.role, windowId: row.window_id } })
+      } catch (e) { reply(500, { error: String(e) }) }
+      return
+    }
+
+    // ── POST /api/tickets/:id/no-show ────────────────────────────────────────
+    const noShowMatch = path.match(/^\/api\/tickets\/([^/]+)\/no-show$/)
+    if (method === 'POST' && noShowMatch) {
+      const ticketId = noShowMatch[1]
+      try {
+        const db = this.getDb()
+        const ticket = db.prepare('SELECT * FROM tickets WHERE id=?').get(ticketId) as any
+        if (ticket?.window_id) db.prepare('UPDATE windows SET current_ticket_id=NULL WHERE id=?').run(ticket.window_id)
+        db.prepare('UPDATE tickets SET status=? WHERE id=?').run('no_show', ticketId)
+        this.broadcastSSE('queue', this.getQueue())
+        this.broadcastSSE('stats', this.getStats())
+        reply(200, { success: true })
+      } catch (e) { reply(500, { error: String(e) }) }
+      return
+    }
+
     // ── GET / — serve the web operator panel ────────────────────────────────
     if (method === 'GET' && (path === '/' || path === '/index.html')) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
@@ -502,594 +537,498 @@ export class LanServer {
   }
 
   private buildPanel(): string {
+    const orgName = (() => {
+      try {
+        const cfg = readLocalConfig() as any
+        const n = cfg.installationConfig?.organizationName ?? 'Announcement System'
+        return n.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,'&#39;')
+      } catch { return 'Announcement System' }
+    })()
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>Queue Panel</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>${orgName} — Queue Panel</title>
 <style>
-/* ── Reset ───────────────────────────────────────────────── */
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;overflow:hidden}
+html,body{height:100%;overflow:hidden;-webkit-tap-highlight-color:transparent}
 :root{
-  --bg:#0d1117;
-  --surface:#161b22;
-  --surface2:#1c2128;
-  --border:#30363d;
-  --border2:#21262d;
-  --text:#e6edf3;
-  --muted:#8b949e;
-  --cyan:#39d0d8;
-  --blue:#58a6ff;
-  --green:#3fb950;
-  --amber:#d29922;
-  --red:#f85149;
-  --purple:#bc8cff;
-  --accent:#1f6feb;
-  --accent-hover:#388bfd;
+  --bg:#0a0a0f;--s1:#111116;--s2:#18181b;--b1:#27272a;--b2:#3f3f46;
+  --tx:#fafafa;--mt:#71717a;--dm:#52525b;
+  --pr:#4f46e5;--ph:#4338ca;--pl:#818cf8;
+  --em:#10b981;--am:#f59e0b;--rd:#ef4444;--bl:#3b82f6;
 }
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);display:flex;flex-direction:column;height:100vh}
-
-/* ── LOGIN ───────────────────────────────────────────────── */
-#login-screen{flex:1;display:flex;align-items:center;justify-content:center;background:var(--bg)}
-.login-wrap{width:420px}
-.login-brand{text-align:center;margin-bottom:28px}
-.login-brand .icon{font-size:40px}
-.login-brand h1{font-size:22px;font-weight:700;margin-top:10px;color:var(--text)}
-.login-brand p{font-size:13px;color:var(--muted);margin-top:4px}
-.login-box{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:28px}
-.f{margin-bottom:16px}
-.f label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px}
-.f input,.f select{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:9px 12px;font-size:14px;color:var(--text);outline:none;transition:border-color 0.15s}
-.f input:focus,.f select:focus{border-color:var(--accent)}
-.f input::placeholder{color:#484f58}
-.f select option{background:var(--surface)}
-#window-field{display:none}
-.role-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.role-card{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:14px 10px;text-align:center;cursor:pointer;transition:all 0.15s;user-select:none}
-.role-card:hover{border-color:#484f58}
-.role-card.active{border-color:var(--accent);background:#1f2d3d}
-.role-card .ri{font-size:24px;margin-bottom:6px}
-.role-card .rl{font-size:13px;font-weight:600;color:var(--text)}
-.role-card .rs{font-size:11px;color:var(--muted);margin-top:2px}
-.btn-login{width:100%;background:var(--accent);color:#fff;border:none;border-radius:6px;padding:11px;font-size:14px;font-weight:600;cursor:pointer;margin-top:4px;transition:background 0.15s}
-.btn-login:hover{background:var(--accent-hover)}
-.btn-login:disabled{background:#21262d;color:#484f58;cursor:not-allowed}
-
-/* ── APP SHELL ───────────────────────────────────────────── */
-#app{display:none;flex-direction:column;height:100vh;overflow:hidden}
-
-/* ── TOPBAR ──────────────────────────────────────────────── */
-.topbar{height:50px;min-height:50px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 16px;gap:12px;flex-shrink:0}
-.topbar-brand{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:700;color:var(--text)}
-.topbar-brand span{font-size:18px}
-.topbar-sep{width:1px;height:20px;background:var(--border)}
-.topbar-ctx{font-size:13px;color:var(--muted);flex:1}
-.topbar-ctx b{color:var(--text)}
-.topbar-right{display:flex;align-items:center;gap:10px}
-.conn-pill{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--muted);background:var(--bg);border:1px solid var(--border);border-radius:20px;padding:3px 10px}
-.cdot{width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0}
-.cdot.off{background:var(--red)}
-.user-chip{background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:3px 12px 3px 6px;display:flex;align-items:center;gap:6px;font-size:12px}
-.av{width:22px;height:22px;border-radius:50%;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-.av.reception{background:#553098;color:#c4b5fd}
-.av.room{background:#0d4b6e;color:#7dd3fc}
-.btn-out{background:transparent;border:1px solid var(--border);border-radius:5px;padding:4px 10px;font-size:11px;color:var(--muted);cursor:pointer;transition:all 0.15s}
-.btn-out:hover{background:var(--surface2);color:var(--text)}
-
-/* ── STATS BAR ───────────────────────────────────────────── */
-.statsbar{height:52px;min-height:52px;display:grid;grid-template-columns:repeat(4,1fr);background:var(--surface2);border-bottom:1px solid var(--border);flex-shrink:0}
-.sb{display:flex;align-items:center;justify-content:center;gap:10px;border-right:1px solid var(--border2)}
-.sb:last-child{border-right:none}
-.sb-n{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1}
-.sb-l{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.4px;margin-top:2px}
-.sb.w .sb-n{color:var(--blue)}
-.sb.c .sb-n{color:var(--amber)}
-.sb.s .sb-n{color:var(--green)}
-.sb.k .sb-n{color:var(--red)}
-
-/* ── MAIN CONTENT (fills remaining height) ───────────────── */
-#content-area{flex:1;overflow:hidden;display:flex}
-
-/* ── COLUMNS ─────────────────────────────────────────────── */
-.col{display:flex;flex-direction:column;overflow:hidden;border-right:1px solid var(--border)}
-.col:last-child{border-right:none}
-.col-hd{padding:9px 14px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
-.col-hd-title{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px}
-.col-hd-badge{font-size:11px;font-weight:700;color:var(--cyan)}
-.col-body{flex:1;overflow-y:auto}
-.col-body::-webkit-scrollbar{width:4px}
-.col-body::-webkit-scrollbar-track{background:transparent}
-.col-body::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
-
-/* ── SECTION WITHIN COL ──────────────────────────────────── */
-.sec{border-bottom:1px solid var(--border2)}
-.sec-hd{padding:8px 14px;font-size:10px;font-weight:700;color:#484f58;text-transform:uppercase;letter-spacing:0.5px;background:var(--bg)}
-
-/* ── CATEGORY BUTTONS (issue / call) ─────────────────────── */
-.cat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;padding:12px}
-.cat-btn{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px 8px;text-align:center;cursor:pointer;transition:all 0.15s;display:flex;flex-direction:column;align-items:center;gap:3px}
-.cat-btn:hover:not(:disabled){border-color:#444c56;background:#21262d;transform:translateY(-1px)}
-.cat-btn:active:not(:disabled){transform:translateY(0)}
-.cat-btn:disabled{opacity:0.4;cursor:not-allowed}
-.cat-btn .cc{font-size:16px;font-weight:800;letter-spacing:0.5px}
-.cat-btn .cl{font-size:10px;color:var(--muted)}
-.cat-btn .cn{font-size:11px;font-weight:700;margin-top:2px}
-
-/* ── CALL BY NAME ────────────────────────────────────────── */
-.name-box{padding:10px 12px;display:flex;gap:6px;border-top:1px solid var(--border2)}
-.name-inp{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:5px;padding:7px 10px;font-size:13px;color:var(--text);outline:none}
-.name-inp:focus{border-color:var(--accent)}
-.name-inp::placeholder{color:#484f58}
-.name-go{background:var(--accent);color:#fff;border:none;border-radius:5px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;transition:background 0.15s}
-.name-go:hover{background:var(--accent-hover)}
-.name-go:disabled{background:#21262d;color:#484f58;cursor:not-allowed}
-
-/* ── TICKET ROWS ─────────────────────────────────────────── */
-.tr{border-bottom:1px solid var(--border2);padding:9px 14px;display:flex;align-items:center;gap:10px;transition:background 0.1s}
-.tr:last-child{border-bottom:none}
-.tr:hover{background:var(--surface2)}
-.tr-num{font-size:16px;font-weight:800;min-width:52px;font-variant-numeric:tabular-nums}
-.tr-info{flex:1;min-width:0}
-.tr-cat{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.tr-name{font-size:11px;color:#484f58;margin-top:1px}
-.tr-time{font-size:10px;color:#484f58;white-space:nowrap}
-.tr-acts{display:flex;gap:3px;flex-shrink:0}
-.btn{border:none;border-radius:5px;padding:5px 9px;font-size:11px;font-weight:600;cursor:pointer;transition:all 0.1s;white-space:nowrap}
-.btn-r{background:#2d1f0a;color:var(--amber);border:1px solid #3d2a0d}.btn-r:hover{background:#3d2a0d}
-.btn-s{background:#0d2b1a;color:var(--green);border:1px solid #113823}.btn-s:hover{background:#113823}
-.btn-k{background:var(--surface2);color:var(--muted);border:1px solid var(--border)}.btn-k:hover{background:#21262d}
-
-/* ── CURRENT TICKET (room) ───────────────────────────────── */
-.cur-panel{padding:16px 14px;text-align:center;background:var(--surface2);border-bottom:1px solid var(--border);flex-shrink:0}
-.cur-lbl{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px}
-.cur-num{font-size:72px;font-weight:900;line-height:1;font-variant-numeric:tabular-nums;letter-spacing:2px}
-.cur-num.empty{color:#21262d;font-size:48px}
-.cur-cat{font-size:12px;color:var(--muted);margin-top:6px}
-.cur-name{font-size:13px;color:var(--cyan);margin-top:3px;font-weight:500}
-.cur-acts{display:flex;gap:8px;margin-top:14px;justify-content:center}
-.cur-acts .btn{flex:1;max-width:130px;padding:8px}
-
-/* ── POPUP ───────────────────────────────────────────────── */
-.overlay{position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:200}
-.pop{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:32px 28px;text-align:center;min-width:240px;animation:pop .2s ease-out}
-@keyframes pop{from{transform:scale(.85);opacity:0}to{transform:scale(1);opacity:1}}
-.pop-lbl{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px}
-.pop-num{font-size:64px;font-weight:900;line-height:1;letter-spacing:2px;font-variant-numeric:tabular-nums}
-.pop-cat{font-size:13px;color:var(--muted);margin-top:6px;margin-bottom:20px}
-.btn-ok{background:var(--accent);color:#fff;border:none;border-radius:6px;padding:10px 28px;font-size:14px;font-weight:600;cursor:pointer;width:100%}
-.btn-ok:hover{background:var(--accent-hover)}
-
-/* ── FLASH ───────────────────────────────────────────────── */
-.flash{animation:flash .7s ease-out}
-@keyframes flash{0%{background:#1a3a2a}100%{background:transparent}}
-
-.empty{padding:24px;text-align:center;color:#484f58;font-size:13px}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--tx);display:flex;flex-direction:column;height:100vh;font-size:14px}
+input,select,button{font-family:inherit;font-size:inherit}
+/* ── Screens ─────────────────────────────────────────── */
+.scr{display:none;flex-direction:column;height:100vh;overflow:hidden}
+.scr.active{display:flex}
+/* ── LOGIN ───────────────────────────────────────────── */
+#s-login{align-items:center;justify-content:center;background:var(--bg);padding:20px}
+.l-wrap{width:100%;max-width:340px}
+.l-brand{text-align:center;margin-bottom:28px}
+.l-logo{width:52px;height:52px;border-radius:14px;background:var(--pr);display:flex;align-items:center;justify-content:center;margin:0 auto 12px;font-size:22px;box-shadow:0 8px 24px rgba(79,70,229,.35)}
+.l-brand h1{font-size:18px;font-weight:700;color:var(--tx)}
+.l-brand p{font-size:12px;color:var(--mt);margin-top:3px}
+.l-card{background:var(--s1);border:1px solid var(--b1);border-radius:14px;padding:24px}
+.lbl{display:block;font-size:11px;font-weight:600;color:var(--mt);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+.inp{width:100%;background:var(--bg);border:1px solid var(--b1);border-radius:8px;padding:10px 13px;color:var(--tx);outline:none;transition:border-color .15s}
+.inp:focus{border-color:var(--pr)}
+.inp::placeholder{color:var(--dm)}
+.pw-wrap{position:relative}
+.pw-wrap .inp{padding-right:38px}
+.pw-eye{position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--dm);cursor:pointer;padding:4px;font-size:14px;line-height:1}
+.pw-eye:hover{color:var(--mt)}
+.l-err{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:7px;padding:8px 11px;font-size:12px;color:#fca5a5;margin-top:10px}
+.f-gap{margin-top:12px}
+/* ── Buttons ─────────────────────────────────────────── */
+.btn-pr{background:var(--pr);color:#fff;border:none;border-radius:8px;padding:11px 18px;font-weight:600;cursor:pointer;transition:background .15s;width:100%;margin-top:16px}
+.btn-pr:hover{background:var(--ph)}
+.btn-pr:disabled{background:var(--b1);color:var(--dm);cursor:not-allowed}
+.btn-ghost{background:transparent;border:1px solid var(--b1);border-radius:8px;padding:11px 18px;color:var(--mt);cursor:pointer;transition:all .15s;width:100%}
+.btn-ghost:hover{background:var(--s2);color:var(--tx)}
+.btn-sm{background:var(--s2);border:1px solid var(--b1);border-radius:7px;padding:6px 12px;color:var(--mt);cursor:pointer;transition:all .15s;font-size:12px;white-space:nowrap}
+.btn-sm:hover{color:var(--tx);background:var(--b1)}
+/* ── DEPT PICKER ─────────────────────────────────────── */
+#s-dept{background:var(--bg);align-items:center;justify-content:flex-start;padding:0;overflow-y:auto}
+.d-wrap{width:100%;max-width:440px;padding:32px 20px;margin:0 auto}
+.d-hdr{text-align:center;margin-bottom:28px}
+.d-logo{width:52px;height:52px;border-radius:14px;background:var(--pr);display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:22px;box-shadow:0 8px 24px rgba(79,70,229,.35)}
+.d-hdr h2{font-size:18px;font-weight:700;color:var(--tx)}
+.d-hdr p{font-size:13px;color:var(--mt);margin-top:4px}
+.dept-card{width:100%;display:flex;align-items:center;gap:14px;background:var(--s1);border:1px solid var(--b1);border-radius:12px;padding:15px 16px;cursor:pointer;transition:all .15s;text-align:left;margin-bottom:8px;color:var(--tx)}
+.dept-card:hover{background:var(--s2);border-color:var(--b2)}
+.dept-badge{width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;flex-shrink:0}
+.dept-info{flex:1;min-width:0}
+.dept-name{font-size:14px;font-weight:600;color:var(--tx)}
+.dept-wait{font-size:12px;color:var(--mt);margin-top:2px}
+.dept-arrow{color:var(--dm);font-size:18px;flex-shrink:0}
+/* ── MAIN PANEL ──────────────────────────────────────── */
+#s-main{background:var(--bg)}
+/* Topbar */
+.topbar{height:48px;min-height:48px;background:var(--s1);border-bottom:1px solid var(--b1);display:flex;align-items:center;padding:0 14px;gap:10px;flex-shrink:0}
+.tb-logo{width:28px;height:28px;border-radius:7px;background:var(--pr);display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0}
+.tb-org{font-size:13px;font-weight:700;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px}
+.dept-pill{border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;white-space:nowrap}
+.tb-gap{flex:1}
+.win-sel{background:var(--s2);border:1px solid var(--b1);border-radius:7px;padding:4px 8px;color:var(--tx);font-size:11px;outline:none;cursor:pointer;max-width:110px}
+.win-sel option{background:var(--s1)}
+.conn-dot{width:7px;height:7px;border-radius:50%;background:var(--dm);flex-shrink:0;transition:background .3s}
+.conn-dot.on{background:var(--em)}
+/* Stats strip */
+.stats-strip{display:grid;grid-template-columns:repeat(4,1fr);background:var(--s2);border-bottom:1px solid var(--b1);flex-shrink:0}
+.stat-box{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 4px;border-right:1px solid var(--b1)}
+.stat-box:last-child{border-right:none}
+.stat-n{font-size:22px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums}
+.stat-l{font-size:9px;text-transform:uppercase;letter-spacing:.4px;color:var(--mt);margin-top:2px}
+.n-am{color:var(--am)}.n-bl{color:var(--bl)}.n-em{color:var(--em)}.n-mt{color:var(--dm)}
+/* Scrollable body */
+.main-body{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
+.main-body::-webkit-scrollbar{width:4px}
+.main-body::-webkit-scrollbar-thumb{background:var(--b1);border-radius:2px}
+/* Hero card */
+.hero{background:var(--s1);border:1px solid var(--b1);border-radius:14px;padding:20px}
+.hero-lbl{font-size:10px;font-weight:700;color:var(--mt);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px}
+.hero-num{font-size:72px;font-weight:900;line-height:1;letter-spacing:2px;font-variant-numeric:tabular-nums;color:var(--tx);transition:color .2s}
+.hero-num.empty{color:var(--b2);font-size:52px}
+.hero-meta{font-size:12px;color:var(--mt);margin-top:6px;min-height:18px}
+.hero-meta .hm-cat{color:var(--pl)}
+.hero-meta .hm-age{color:var(--dm)}
+.hero-actions{display:flex;gap:8px;margin-top:16px}
+.btn-call{flex:2;background:var(--pr);color:#fff;border:none;border-radius:10px;padding:14px;font-size:15px;font-weight:700;cursor:pointer;transition:all .15s;box-shadow:0 4px 14px rgba(79,70,229,.3)}
+.btn-call:hover:not(:disabled){background:var(--ph);transform:translateY(-1px)}
+.btn-call:disabled{background:var(--b1);color:var(--dm);cursor:not-allowed;box-shadow:none;transform:none}
+.btn-recall{flex:1;background:var(--s2);border:1px solid var(--b1);border-radius:10px;padding:14px;color:var(--mt);font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
+.btn-recall:hover:not(:disabled){background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.3);color:var(--am)}
+.btn-recall:disabled{opacity:.35;cursor:not-allowed}
+/* Sections */
+.section{background:var(--s1);border:1px solid var(--b1);border-radius:14px;overflow:hidden}
+.sec-hd{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--b1)}
+.sec-hd-title{font-size:11px;font-weight:700;color:var(--mt);text-transform:uppercase;letter-spacing:.5px}
+.sec-badge{font-size:12px;font-weight:700;color:var(--pl)}
+.sec-badge.am{color:var(--am)}
+.empty-msg{padding:20px;text-align:center;font-size:13px;color:var(--dm)}
+/* Ticket rows — called */
+.trow{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--b1);transition:background .1s}
+.trow:last-child{border-bottom:none}
+.trow:hover{background:var(--s2)}
+.trow-num{font-size:18px;font-weight:800;min-width:54px;font-variant-numeric:tabular-nums;flex-shrink:0}
+.trow-info{flex:1;min-width:0}
+.trow-cat{font-size:12px;color:var(--mt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trow-meta{font-size:11px;color:var(--dm);margin-top:1px}
+.trow-acts{display:flex;gap:4px;flex-shrink:0}
+.act{border:none;border-radius:7px;padding:6px 9px;font-size:11px;font-weight:600;cursor:pointer;transition:all .1s}
+.act-s{background:rgba(16,185,129,.1);color:var(--em);border:1px solid rgba(16,185,129,.2)}.act-s:hover{background:rgba(16,185,129,.2)}
+.act-r{background:rgba(245,158,11,.08);color:var(--am);border:1px solid rgba(245,158,11,.2)}.act-r:hover{background:rgba(245,158,11,.15)}
+.act-n{background:rgba(239,68,68,.08);color:var(--rd);border:1px solid rgba(239,68,68,.2)}.act-n:hover{background:rgba(239,68,68,.15)}
+.act-k{background:var(--s2);color:var(--dm);border:1px solid var(--b1)}.act-k:hover{background:var(--b1)}
+/* Ticket rows — waiting */
+.wrow{display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--b1);transition:background .1s}
+.wrow:last-child{border-bottom:none}
+.wrow.next{background:rgba(79,70,229,.06);border-left:2px solid var(--pr)}
+.wrow-pos{font-size:11px;font-weight:700;color:var(--dm);min-width:18px;text-align:center}
+.wrow.next .wrow-pos{color:var(--pl)}
+.wrow-num{font-size:15px;font-weight:800;min-width:52px;font-variant-numeric:tabular-nums}
+.wrow.next .wrow-num{color:var(--pl)}
+.wrow-info{flex:1;min-width:0}
+.wrow-cat{font-size:12px;color:var(--mt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wrow-age{font-size:11px;color:var(--dm);margin-top:1px}
+.next-badge{font-size:9px;font-weight:700;color:var(--pr);background:rgba(79,70,229,.12);border:1px solid rgba(79,70,229,.2);border-radius:4px;padding:2px 5px;flex-shrink:0}
+/* Name call */
+.name-row{display:flex;gap:8px;padding:12px 14px}
+.name-inp{flex:1;background:var(--bg);border:1px solid var(--b1);border-radius:8px;padding:10px 12px;color:var(--tx);outline:none;transition:border-color .15s;min-width:0}
+.name-inp:focus{border-color:var(--pr)}
+.name-inp::placeholder{color:var(--dm)}
+.btn-announce{background:var(--s2);border:1px solid var(--b1);border-radius:8px;padding:10px 14px;color:var(--tx);font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap;flex-shrink:0}
+.btn-announce:hover{background:var(--b1)}
+.btn-announce:disabled{opacity:.35;cursor:not-allowed}
+/* Flash animation */
+@keyframes flash{0%{background:rgba(79,70,229,.15)}100%{background:transparent}}
+.flash{animation:flash .8s ease-out}
 </style>
 </head>
 <body>
 
-<!-- ══ LOGIN ══ -->
-<div id="login-screen">
-  <div class="login-wrap">
-    <div class="login-brand">
-      <div class="icon">&#128250;</div>
-      <h1>Queue Operator Panel</h1>
-      <p>Sign in to continue</p>
+<!-- ══ SCREEN: LOGIN ══════════════════════════════════════════════════════ -->
+<div id="s-login" class="scr active">
+  <div class="l-wrap">
+    <div class="l-brand">
+      <div class="l-logo">&#9654;</div>
+      <h1>${orgName}</h1>
+      <p>Queue Operator Panel</p>
     </div>
-    <div class="login-box">
-      <div class="f">
-        <label>Your Name</label>
-        <input id="inp-name" type="text" placeholder="e.g. Dr. Amina or Front Desk" autocomplete="off"/>
-      </div>
-      <div class="f">
-        <label>Role</label>
-        <div class="role-row">
-          <div class="role-card active" id="role-reception" onclick="selRole('reception')">
-            <div class="ri">&#128203;</div>
-            <div class="rl">Reception</div>
-            <div class="rs">Issue &amp; manage</div>
-          </div>
-          <div class="role-card" id="role-room" onclick="selRole('room')">
-            <div class="ri">&#128137;</div>
-            <div class="rl">Room / Doctor</div>
-            <div class="rs">Call patients</div>
-          </div>
+    <div class="l-card">
+      <label class="lbl">Username</label>
+      <input id="i-user" class="inp" type="text" placeholder="e.g. dr.amina" autocomplete="username">
+      <div class="f-gap">
+        <label class="lbl">Password</label>
+        <div class="pw-wrap">
+          <input id="i-pass" class="inp" type="password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;" autocomplete="current-password">
+          <button class="pw-eye" id="pw-eye" type="button" onclick="togglePw()">&#128065;</button>
         </div>
       </div>
-      <div class="f" id="window-field">
-        <label>Your Room / Window</label>
-        <select id="inp-window">
-          <option value="">&#8212; Select &#8212;</option>
-        </select>
-      </div>
-      <button class="btn-login" id="btn-enter" onclick="doLogin()" disabled>Enter Panel</button>
+      <div id="l-err" class="l-err" style="display:none"></div>
+      <button id="b-login" class="btn-pr" onclick="doLogin()">Sign In &#8594;</button>
     </div>
   </div>
 </div>
 
-<!-- ══ APP ══ -->
-<div id="app">
+<!-- ══ SCREEN: DEPT PICKER ═══════════════════════════════════════════════ -->
+<div id="s-dept" class="scr">
+  <div class="d-wrap">
+    <div class="d-hdr">
+      <div class="d-logo">&#9654;</div>
+      <h2 id="d-greet">Karibu</h2>
+      <p>Chagua idara yako kuendelea</p>
+    </div>
+    <div id="d-grid"></div>
+    <button id="b-all" class="btn-ghost" style="display:none;margin-top:8px" onclick="selectDept(null)">
+      &#9745; Angalia idara zote (supervisor mode)
+    </button>
+  </div>
+</div>
 
+<!-- ══ SCREEN: MAIN ══════════════════════════════════════════════════════ -->
+<div id="s-main" class="scr">
+
+  <!-- Top bar -->
   <div class="topbar">
-    <div class="topbar-brand"><span>&#128250;</span> Queue Panel</div>
-    <div class="topbar-sep"></div>
-    <div class="topbar-ctx" id="ctx-label">—</div>
-    <div class="topbar-right">
-      <div class="conn-pill"><div class="cdot" id="cdot"></div><span id="conn-lbl">Live</span></div>
-      <div class="user-chip">
-        <div class="av" id="av">?</div>
-        <span id="hd-user">—</span>
+    <div class="tb-logo">&#9654;</div>
+    <span class="tb-org">${orgName}</span>
+    <div id="tb-dept" class="dept-pill" style="display:none"></div>
+    <div class="tb-gap"></div>
+    <select id="win-sel" class="win-sel"></select>
+    <div id="conn" class="conn-dot" title="Live connection"></div>
+    <button class="btn-sm" onclick="signOut()">&#10005; Sign out</button>
+  </div>
+
+  <!-- Stats strip -->
+  <div class="stats-strip">
+    <div class="stat-box"><div id="sv-w" class="stat-n n-am">0</div><div class="stat-l">Waiting</div></div>
+    <div class="stat-box"><div id="sv-c" class="stat-n n-bl">0</div><div class="stat-l">Called</div></div>
+    <div class="stat-box"><div id="sv-s" class="stat-n n-em">0</div><div class="stat-l">Served</div></div>
+    <div class="stat-box"><div id="sv-k" class="stat-n n-mt">0</div><div class="stat-l">Skipped</div></div>
+  </div>
+
+  <!-- Scrollable body -->
+  <div class="main-body">
+
+    <!-- Hero: Next ticket + Call Next -->
+    <div class="hero" id="hero-card">
+      <div class="hero-lbl">Next in Queue</div>
+      <div id="h-num" class="hero-num empty">&#8212;</div>
+      <div id="h-meta" class="hero-meta">Queue is empty</div>
+      <div class="hero-actions">
+        <button id="b-next" class="btn-call" onclick="callNext()" disabled>&#128276;&nbsp; Call Next</button>
+        <button id="b-recall" class="btn-recall" onclick="recallLast()" disabled>&#8635;&nbsp; Recall</button>
       </div>
-      <button class="btn-out" onclick="doLogout()">Sign out</button>
     </div>
-  </div>
 
-  <div class="statsbar">
-    <div class="sb w"><div><div class="sb-n" id="s-w">0</div><div class="sb-l">Waiting</div></div></div>
-    <div class="sb c"><div><div class="sb-n" id="s-c">0</div><div class="sb-l">Called</div></div></div>
-    <div class="sb s"><div><div class="sb-n" id="s-s">0</div><div class="sb-l">Served</div></div></div>
-    <div class="sb k"><div><div class="sb-n" id="s-k">0</div><div class="sb-l">Skipped</div></div></div>
-  </div>
+    <!-- Active Calls -->
+    <div class="section" id="sec-called" style="display:none">
+      <div class="sec-hd">
+        <span class="sec-hd-title">Active Calls</span>
+        <span id="called-ct" class="sec-badge">0</span>
+      </div>
+      <div id="called-list"></div>
+    </div>
 
-  <div id="content-area"></div>
+    <!-- Waiting Queue -->
+    <div class="section">
+      <div class="sec-hd">
+        <span class="sec-hd-title">Waiting Queue</span>
+        <span id="wait-ct" class="sec-badge am">0</span>
+      </div>
+      <div id="wait-list"></div>
+    </div>
 
-</div>
+    <!-- Name Call -->
+    <div class="section">
+      <div class="sec-hd">
+        <span class="sec-hd-title">&#127897;&nbsp; Call by Name</span>
+      </div>
+      <div class="name-row">
+        <input id="i-name" class="name-inp" type="text" placeholder="Type patient or visitor name&#8230;">
+        <button id="b-announce" class="btn-announce" onclick="callName()">Announce</button>
+      </div>
+    </div>
 
-<!-- Ticket issued popup -->
-<div id="issue-pop" style="display:none" class="overlay" onclick="closePop()">
-  <div class="pop" onclick="event.stopPropagation()">
-    <div class="pop-lbl">Ticket Issued</div>
-    <div class="pop-num" id="pop-num">—</div>
-    <div class="pop-cat" id="pop-cat"></div>
-    <button class="btn-ok" onclick="closePop()">&#10003; Done</button>
   </div>
 </div>
 
 <script>
-const API_TOKEN='${this.apiToken}'
-const H={'Content-Type':'application/json','Authorization':'Bearer '+API_TOKEN}
-let state={tickets:[],windows:[],categories:[]}
-let stats={waiting:0,called:0,served:0,skipped:0}
-let session=null, es=null, selRole_='reception'
+const TOKEN='${this.apiToken}'
+let user=null,dept=null,cats=[],wins=[],tickets=[],es=null
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
-function catFor(id){return state.categories.find(c=>c.id===id)}
-function winFor(id){return state.windows.find(w=>w.id===id)}
-function waitFor(catId){return state.tickets.filter(t=>t.status==='waiting'&&t.category_id===catId).length}
-function ago(iso){if(!iso)return'';const m=Math.floor((Date.now()-new Date(iso).getTime())/60000);return m<1?'now':m+'m'}
-function initials(n){return n.split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase()}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function ago(iso){if(!iso)return'';var m=Math.floor((Date.now()-new Date(iso).getTime())/60000);return m<1?'<1m':m+'m'}
+function catOf(id){return cats.find(function(c){return c.id===id})||null}
+function winOf(id){return wins.find(function(w){return w.id===id})||null}
+function myTickets(){return dept?tickets.filter(function(t){return t.category_id===dept.id}):tickets}
+function post(path,body){return fetch(path,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+TOKEN},body:JSON.stringify(body)}).then(function(r){return r.json()})}
+function show(id){document.querySelectorAll('.scr').forEach(function(s){s.classList.remove('active')});document.getElementById(id).classList.add('active')}
+function selWin(){var s=document.getElementById('win-sel');return s?s.value:''}
 
 // ── login ─────────────────────────────────────────────────────────────────────
-function selRole(r){
-  selRole_=r
-  document.getElementById('role-reception').classList.toggle('active',r==='reception')
-  document.getElementById('role-room').classList.toggle('active',r==='room')
-  document.getElementById('window-field').style.display=r==='room'?'block':'none'
-  chkLogin()
-}
-function chkLogin(){
-  const n=document.getElementById('inp-name').value.trim()
-  const w=document.getElementById('inp-window').value
-  document.getElementById('btn-enter').disabled=n.length<2||(selRole_==='room'&&!w)
-}
-document.getElementById('inp-name').addEventListener('input',chkLogin)
-document.getElementById('inp-window').addEventListener('change',chkLogin)
+function togglePw(){var i=document.getElementById('i-pass');i.type=i.type==='password'?'text':'password'}
 
-async function loadWins(){
+async function doLogin(){
+  var u=document.getElementById('i-user').value.trim()
+  var p=document.getElementById('i-pass').value
+  var btn=document.getElementById('b-login')
+  var err=document.getElementById('l-err')
+  if(!u||!p)return
+  btn.disabled=true;btn.textContent='Signing in\u2026'
+  err.style.display='none'
   try{
-    const cfg=await fetch('/api/config').then(r=>r.json())
-    const sel=document.getElementById('inp-window')
-    sel.innerHTML='<option value="">&#8212; Select &#8212;</option>'+
-      cfg.windows.filter(w=>w.is_active).map(w=>\`<option value="\${w.id}" data-lbl="\${esc(w.label)}">\${esc(w.label)}</option>\`).join('')
-  }catch{}
-}
-loadWins()
-
-function doLogin(){
-  const name=document.getElementById('inp-name').value.trim()
-  const sel=document.getElementById('inp-window')
-  session={name,role:selRole_,windowId:sel.value,windowLabel:sel.options[sel.selectedIndex]?.dataset.lbl??''}
-  localStorage.setItem('op_session',JSON.stringify(session))
-  startApp()
-}
-
-function doLogout(){
-  if(es){es.close();es=null}
-  localStorage.removeItem('op_session')
-  session=null
-  document.getElementById('login-screen').style.display='flex'
-  document.getElementById('app').style.display='none'
-  loadWins()
+    var res=await post('/api/auth/login',{username:u,password:p})
+    if(!res.user){
+      err.textContent=res.error||'Invalid credentials'
+      err.style.display='block'
+      btn.disabled=false;btn.innerHTML='Sign In &#8594;'
+      return
+    }
+    user=res.user
+    var cfg=await fetch('/api/config').then(function(r){return r.json()})
+    cats=cfg.categories||[];wins=cfg.windows||[]
+    buildDeptPicker()
+    show('s-dept')
+  }catch(e){
+    err.textContent='Connection error. Try again.'
+    err.style.display='block'
+    btn.disabled=false;btn.innerHTML='Sign In &#8594;'
+  }
 }
 
-// ── startup ───────────────────────────────────────────────────────────────────
-function startApp(){
-  document.getElementById('login-screen').style.display='none'
-  document.getElementById('app').style.display='flex'
-  const av=document.getElementById('av')
-  av.textContent=initials(session.name)
-  av.className='av '+session.role
-  document.getElementById('hd-user').textContent=session.name
-  document.getElementById('ctx-label').innerHTML=
-    session.role==='reception'
-      ? '<b>Reception</b> — Issue &amp; manage all tickets'
-      : '<b>'+esc(session.windowLabel)+'</b> — '+esc(session.name)
-  session.role==='reception'?buildReception():buildRoom()
+// ── dept picker ───────────────────────────────────────────────────────────────
+function buildDeptPicker(){
+  document.getElementById('d-greet').textContent='Karibu, '+(user.displayName||user.username)
+  var grid=document.getElementById('d-grid')
+  grid.innerHTML=''
+  cats.forEach(function(cat){
+    var wc=tickets.filter(function(t){return t.status==='waiting'&&t.category_id===cat.id}).length
+    var card=document.createElement('button')
+    card.className='dept-card'
+    card.innerHTML='<div class="dept-badge" style="background:'+cat.color+'20;border:1px solid '+cat.color+'40;color:'+cat.color+'">'+esc(cat.code)+'</div>'
+      +'<div class="dept-info"><div class="dept-name">'+esc(cat.label)+'</div>'
+      +'<div class="dept-wait">'+(wc>0?'<span style="color:var(--am)">'+wc+' wanasubiri</span>':'Hakuna wanasubiri')+'</div></div>'
+      +'<div class="dept-arrow">&#8250;</div>'
+    card.onclick=function(){selectDept(cat)}
+    grid.appendChild(card)
+  })
+  var bAll=document.getElementById('b-all')
+  bAll.style.display=(user.role==='admin'||user.role==='supervisor')?'block':'none'
+}
+
+function selectDept(cat){
+  dept=cat
+  populateWinSel()
   connectSSE()
-  fetch('/api/queue').then(r=>r.json()).then(d=>{state=d;render()})
-  fetch('/api/stats').then(r=>r.json()).then(s=>{stats=s;renderStats()})
+  show('s-main')
+  // dept pill
+  var pill=document.getElementById('tb-dept')
+  if(cat){
+    pill.textContent=cat.label
+    pill.style.cssText='display:inline-flex;background:'+cat.color+'18;border:1px solid '+cat.color+'35;color:'+cat.color
+  }else{
+    pill.textContent='All Depts'
+    pill.style.cssText='display:inline-flex;background:var(--s2);border:1px solid var(--b1);color:var(--mt)'
+  }
+  renderAll()
 }
 
-window.addEventListener('DOMContentLoaded',()=>{
-  const saved=localStorage.getItem('op_session')
-  if(saved){try{session=JSON.parse(saved);document.getElementById('inp-name').value=session.name;selRole(session.role);startApp();return}catch{}}
-})
+// ── window selector ───────────────────────────────────────────────────────────
+function populateWinSel(){
+  var sel=document.getElementById('win-sel')
+  sel.innerHTML=wins.map(function(w){
+    return '<option value="'+esc(w.id)+'"'+(user.windowId===w.id?' selected':'')+'>'+esc(w.label)+'</option>'
+  }).join('')
+}
 
 // ── SSE ───────────────────────────────────────────────────────────────────────
 function connectSSE(){
-  if(es)es.close()
-  es=new EventSource('/api/events?token='+API_TOKEN)
-  const dot=document.getElementById('cdot'),lbl=document.getElementById('conn-lbl')
-  es.onopen=()=>{dot.classList.remove('off');lbl.textContent='Live'}
-  es.onerror=()=>{dot.classList.add('off');lbl.textContent='Reconnecting'}
-  es.addEventListener('queue',e=>{state=JSON.parse(e.data);render()})
-  es.addEventListener('stats',e=>{stats=JSON.parse(e.data);renderStats()})
-  es.addEventListener('announce',e=>{
-    const d=JSON.parse(e.data)
-    if(session?.role==='room'&&d.windowId===session.windowId){
-      const el=document.getElementById('cur-panel')
-      if(el){el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash')}
-    }
+  if(es){try{es.close()}catch(e){}}
+  es=new EventSource('/api/events?token='+TOKEN)
+  es.addEventListener('queue',function(e){
+    var d=JSON.parse(e.data)
+    tickets=d.tickets||[];cats=d.categories||cats;wins=d.windows||wins
+    renderAll()
   })
+  es.addEventListener('stats',function(e){
+    var d=JSON.parse(e.data)
+    renderStats(d)
+  })
+  es.onopen=function(){document.getElementById('conn').className='conn-dot on'}
+  es.onerror=function(){document.getElementById('conn').className='conn-dot'}
 }
 
-function renderStats(){
-  document.getElementById('s-w').textContent=stats.waiting
-  document.getElementById('s-c').textContent=stats.called
-  document.getElementById('s-s').textContent=stats.served
-  document.getElementById('s-k').textContent=stats.skipped
-}
-function render(){session?.role==='reception'?renderReception():renderRoom()}
+// ── render ────────────────────────────────────────────────────────────────────
+function renderAll(){renderHero();renderCalled();renderWaiting();renderStats(null)}
 
-// ══════════════════════════════════════════════════════════════════════════════
-// RECEPTION  — 3-column landscape layout
-// ══════════════════════════════════════════════════════════════════════════════
-function buildReception(){
-  document.getElementById('content-area').innerHTML=\`
-    <div class="col" style="width:260px;min-width:220px">
-      <div class="col-hd"><span class="col-hd-title">&#127915; Issue Ticket</span></div>
-      <div class="col-body">
-        <div class="cat-grid" id="issue-grid"></div>
-        <div class="sec">
-          <div class="sec-hd">Call by Name</div>
-          <div class="name-box">
-            <input class="name-inp" id="rec-name-inp" placeholder="Patient name…" onkeydown="if(event.key==='Enter')recCallName()"/>
-            <button class="name-go" onclick="recCallName()">&#128222; Call</button>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="col" style="flex:1;min-width:0">
-      <div class="col-hd">
-        <span class="col-hd-title">&#9203; Waiting</span>
-        <span class="col-hd-badge" id="q-badge"></span>
-      </div>
-      <div class="col-body" id="waiting-list"></div>
-    </div>
-    <div class="col" style="width:320px;min-width:260px">
-      <div class="col-hd"><span class="col-hd-title">&#128222; Called &amp; Active</span></div>
-      <div class="col-body" id="called-list"></div>
-    </div>\`
+function renderStats(s){
+  var mt=myTickets()
+  document.getElementById('sv-w').textContent=mt.filter(function(t){return t.status==='waiting'}).length
+  document.getElementById('sv-c').textContent=mt.filter(function(t){return t.status==='called'}).length
+  document.getElementById('sv-s').textContent=(s&&!dept)?s.served:mt.filter(function(t){return t.status==='served'}).length
+  document.getElementById('sv-k').textContent=(s&&!dept)?s.skipped:mt.filter(function(t){return t.status==='skipped'||t.status==='no_show'}).length
 }
 
-function renderReception(){
-  // Issue grid
-  const ig=document.getElementById('issue-grid')
-  if(ig)ig.innerHTML=!state.categories.length
-    ?'<div class="empty">No categories</div>'
-    :state.categories.map(c=>{
-        const w=waitFor(c.id)
-        return \`<div class="cat-btn" onclick="issueTicket('\${c.id}')" style="border-color:\${c.color}30">
-          <div class="cc" style="color:\${c.color}">\${esc(c.code)}</div>
-          <div class="cl">\${esc(c.label)}</div>
-          <div class="cn" style="color:\${c.color}">\${w} waiting</div>
-        </div>\`
-      }).join('')
-
-  // Waiting
-  const waiting=state.tickets.filter(t=>t.status==='waiting')
-  const qb=document.getElementById('q-badge')
-  if(qb)qb.textContent=waiting.length||''
-  const wl=document.getElementById('waiting-list')
-  if(wl)wl.innerHTML=!waiting.length
-    ?'<div class="empty">Queue is empty</div>'
-    :waiting.map(t=>{
-        const cat=catFor(t.category_id)
-        return \`<div class="tr">
-          <div class="tr-num" style="color:\${cat?.color??'#58a6ff'}">\${esc(t.display_number)}</div>
-          <div class="tr-info">
-            <div style="font-size:13px;font-weight:600">\${esc(cat?.label??t.category_id)}</div>
-            \${t.callee_name?'<div class="tr-name">'+esc(t.callee_name)+'</div>':''}
-            <div class="tr-name">\${ago(t.created_at)} ago</div>
-          </div>
-        </div>\`
-      }).join('')
-
-  // Called
-  const called=state.tickets.filter(t=>t.status==='called')
-  const cl=document.getElementById('called-list')
-  if(cl)cl.innerHTML=!called.length
-    ?'<div class="empty">No tickets called yet</div>'
-    :called.map(t=>{
-        const cat=catFor(t.category_id)
-        const win=winFor(t.window_id)
-        return \`<div class="tr">
-          <div class="tr-num" style="color:\${cat?.color??'#d29922'}">\${esc(t.display_number)}</div>
-          <div class="tr-info">
-            <div style="font-size:13px;font-weight:600">\${esc(cat?.label??'')}</div>
-            \${t.callee_name?'<div class="tr-name">'+esc(t.callee_name)+'</div>':''}
-            <div class="tr-cat">\${esc(win?.label??'')} · \${ago(t.called_at)} ago</div>
-          </div>
-          <div class="tr-acts">
-            <button class="btn btn-r" onclick="doRecall('\${t.id}')">&#x21BA;</button>
-            <button class="btn btn-s" onclick="doServe('\${t.id}')">&#x2713;</button>
-            <button class="btn btn-k" onclick="doSkip('\${t.id}')">&#x23E9;</button>
-          </div>
-        </div>\`
-      }).join('')
-}
-
-async function issueTicket(categoryId){
-  const btn=event.currentTarget
-  btn.style.opacity='0.5';btn.style.pointerEvents='none'
-  try{
-    const r=await fetch('/api/tickets/issue',{method:'POST',headers:H,body:JSON.stringify({categoryId})})
-    const d=await r.json()
-    if(d.ticket){
-      const cat=state.categories.find(c=>c.id===categoryId)
-      document.getElementById('pop-num').textContent=d.ticket.displayNumber
-      document.getElementById('pop-num').style.color=cat?.color??'#39d0d8'
-      document.getElementById('pop-cat').textContent=cat?.label??''
-      document.getElementById('issue-pop').style.display='flex'
-    }
-  }finally{btn.style.opacity='1';btn.style.pointerEvents=''}
-}
-function closePop(){document.getElementById('issue-pop').style.display='none'}
-
-async function recCallName(){
-  const inp=document.getElementById('rec-name-inp')
-  const name=inp.value.trim()
-  if(!name)return
-  await fetch('/api/call-name',{method:'POST',headers:H,body:JSON.stringify({name,windowId:''})})
-  inp.value=''
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// ROOM VIEW  — 2-column landscape layout
-// ══════════════════════════════════════════════════════════════════════════════
-function buildRoom(){
-  document.getElementById('content-area').innerHTML=\`
-    <div class="col" style="width:280px;min-width:240px">
-      <div class="cur-panel" id="cur-panel">
-        <div class="cur-lbl">Now Serving</div>
-        <div class="cur-num empty" id="cur-num">&#8212;</div>
-        <div class="cur-cat" id="cur-cat">Ready to call</div>
-        <div class="cur-name" id="cur-name"></div>
-        <div class="cur-acts" id="cur-acts" style="display:none">
-          <button class="btn btn-r" onclick="doRecall(curId())">&#x21BA; Recall</button>
-          <button class="btn btn-s" onclick="doServe(curId())">&#x2713; Served</button>
-          <button class="btn btn-k" onclick="doSkip(curId())">&#x23E9; Skip</button>
-        </div>
-      </div>
-      <div class="col-hd" style="flex-shrink:0"><span class="col-hd-title">&#128222; Call Next</span></div>
-      <div class="col-body">
-        <div class="cat-grid" id="call-grid"></div>
-        <div class="sec">
-          <div class="sec-hd">Call by Name</div>
-          <div class="name-box">
-            <input class="name-inp" id="room-name-inp" placeholder="Patient name…" onkeydown="if(event.key==='Enter')roomCallName()"/>
-            <button class="name-go" onclick="roomCallName()">&#128222; Call</button>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="col" style="flex:1;min-width:0">
-      <div class="col-hd">
-        <span class="col-hd-title">&#9203; Waiting</span>
-        <span class="col-hd-badge" id="room-q-badge"></span>
-      </div>
-      <div class="col-body" id="room-waiting-list"></div>
-    </div>\`
-}
-
-function curId(){
-  const win=state.windows.find(w=>w.id===session?.windowId)
-  return win?.current_ticket_id??null
-}
-
-function renderRoom(){
-  const win=state.windows.find(w=>w.id===session?.windowId)
-  const cur=win?.current_ticket_id?state.tickets.find(t=>t.id===win.current_ticket_id):null
-
-  const numEl=document.getElementById('cur-num')
-  const catEl=document.getElementById('cur-cat')
-  const nameEl=document.getElementById('cur-name')
-  const actEl=document.getElementById('cur-acts')
-  if(numEl){
-    if(cur){
-      const cat=catFor(cur.category_id)
-      numEl.textContent=cur.display_number
-      numEl.className='cur-num'
-      numEl.style.color=cat?.color??'#39d0d8'
-      catEl.textContent=cat?.label??''
-      nameEl.textContent=cur.callee_name??''
-      actEl.style.display='flex'
-    }else{
-      numEl.innerHTML='&#8212;'
-      numEl.className='cur-num empty'
-      numEl.style.color=''
-      catEl.textContent='Ready to call'
-      nameEl.textContent=''
-      actEl.style.display='none'
-    }
+function renderHero(){
+  var waiting=myTickets().filter(function(t){return t.status==='waiting'})
+  var called=myTickets().filter(function(t){return t.status==='called'})
+  var nEl=document.getElementById('h-num'),mEl=document.getElementById('h-meta')
+  var bNext=document.getElementById('b-next'),bRec=document.getElementById('b-recall')
+  if(waiting.length>0){
+    var t=waiting[0],cat=catOf(t.category_id)
+    nEl.textContent=t.display_number;nEl.className='hero-num'
+    mEl.innerHTML='<span class="hm-cat">'+(cat?esc(cat.label):'')+'</span> &nbsp;<span class="hm-age">'+ago(t.created_at)+' waiting</span>'
+    bNext.disabled=false
+  }else{
+    nEl.innerHTML='&#8212;';nEl.className='hero-num empty'
+    mEl.textContent='Queue is empty';bNext.disabled=true
   }
-
-  const myCats=state.categories.filter(c=>{try{return JSON.parse(c.window_ids??'[]').includes(session?.windowId)}catch{return false}})
-  const cats=myCats.length?myCats:state.categories
-
-  const cg=document.getElementById('call-grid')
-  if(cg)cg.innerHTML=!cats.length
-    ?'<div class="empty">No categories assigned</div>'
-    :cats.map(c=>{
-        const w=waitFor(c.id)
-        return \`<button class="cat-btn" onclick="callNext('\${c.id}')" \${w===0?'disabled':''} style="border-color:\${c.color}30">
-          <div class="cc" style="color:\${c.color}">\${esc(c.code)}</div>
-          <div class="cl">\${esc(c.label)}</div>
-          <div class="cn" style="color:\${w>0?'#d29922':'#484f58'}">\${w} waiting</div>
-        </button>\`
-      }).join('')
-
-  const myWaiting=state.tickets.filter(t=>
-    t.status==='waiting'&&(myCats.length?myCats.some(c=>c.id===t.category_id):true)
-  ).slice(0,30)
-  const rwl=document.getElementById('room-waiting-list')
-  const rb=document.getElementById('room-q-badge')
-  if(rb)rb.textContent=myWaiting.length||''
-  if(rwl)rwl.innerHTML=!myWaiting.length
-    ?'<div class="empty">No patients waiting &#10003;</div>'
-    :myWaiting.map(t=>{
-        const cat=catFor(t.category_id)
-        return \`<div class="tr">
-          <div class="tr-num" style="color:\${cat?.color??'#58a6ff'};font-size:15px;min-width:50px">\${esc(t.display_number)}</div>
-          <div class="tr-info">
-            <div style="font-size:12px;font-weight:600">\${esc(cat?.label??'')}</div>
-            \${t.callee_name?'<div class="tr-name">'+esc(t.callee_name)+'</div>':''}
-          </div>
-          <div class="tr-time">\${ago(t.created_at)}</div>
-        </div>\`
-      }).join('')
+  bRec.disabled=called.length===0
 }
 
-async function callNext(categoryId){
-  if(!session?.windowId)return
-  await fetch('/api/tickets/next/'+session.windowId+'/'+categoryId,{method:'POST',headers:H})
+function renderCalled(){
+  var called=myTickets().filter(function(t){return t.status==='called'}).slice().reverse()
+  var sec=document.getElementById('sec-called')
+  var list=document.getElementById('called-list')
+  document.getElementById('called-ct').textContent=called.length
+  if(called.length===0){sec.style.display='none';return}
+  sec.style.display='block'
+  list.innerHTML=called.map(function(t){
+    var cat=catOf(t.category_id),win=winOf(t.window_id)
+    var age=t.called_at?ago(t.called_at):''
+    return '<div class="trow" id="tr-'+t.id+'">'
+      +'<div class="trow-num" style="color:'+(cat?cat.color:'var(--pl)')+'">'+esc(t.display_number)+'</div>'
+      +'<div class="trow-info"><div class="trow-cat">'+(cat?esc(cat.label):'')+'</div>'
+      +'<div class="trow-meta">'+(win?'&#8594; '+esc(win.label):'')+(age?' &middot; '+age:'')+'</div></div>'
+      +'<div class="trow-acts">'
+      +'<button class="act act-s" onclick="doServe(\''+t.id+'\')">&#10003;</button>'
+      +'<button class="act act-r" onclick="doRecall(\''+t.id+'\')">&#8635;</button>'
+      +'<button class="act act-n" onclick="doNoShow(\''+t.id+'\')">&#10005;</button>'
+      +'<button class="act act-k" onclick="doSkip(\''+t.id+'\')">&#9197;</button>'
+      +'</div></div>'
+  }).join('')
 }
 
-async function roomCallName(){
-  const inp=document.getElementById('room-name-inp')
-  const name=inp.value.trim()
-  if(!name||!session?.windowId)return
-  await fetch('/api/call-name',{method:'POST',headers:H,body:JSON.stringify({name,windowId:session.windowId})})
-  inp.value=''
+function renderWaiting(){
+  var waiting=myTickets().filter(function(t){return t.status==='waiting'})
+  document.getElementById('wait-ct').textContent=waiting.length
+  var el=document.getElementById('wait-list')
+  if(waiting.length===0){el.innerHTML='<div class="empty-msg">&#10003; Queue is empty</div>';return}
+  el.innerHTML=waiting.map(function(t,i){
+    var cat=catOf(t.category_id)
+    return '<div class="wrow'+(i===0?' next':'')+'">'
+      +'<div class="wrow-pos">'+(i+1)+'</div>'
+      +'<div class="wrow-num">'+esc(t.display_number)+'</div>'
+      +'<div class="wrow-info"><div class="wrow-cat">'+(cat?esc(cat.label):'')+'</div>'
+      +'<div class="wrow-age">'+ago(t.created_at)+'</div></div>'
+      +(i===0?'<div class="next-badge">NEXT</div>':'')
+      +'</div>'
+  }).join('')
 }
 
-// ─── Shared ───────────────────────────────────────────────────────────────────
-async function doRecall(id){if(id)await fetch('/api/tickets/'+id+'/recall',{method:'POST',headers:H})}
-async function doServe(id){if(id)await fetch('/api/tickets/'+id+'/serve',{method:'POST',headers:H})}
-async function doSkip(id){if(id)await fetch('/api/tickets/'+id+'/skip',{method:'POST',headers:H})}
+// ── actions ───────────────────────────────────────────────────────────────────
+async function callNext(){
+  var waiting=myTickets().filter(function(t){return t.status==='waiting'})
+  if(!waiting.length)return
+  var t=waiting[0],wid=selWin()
+  if(!wid)return
+  document.getElementById('b-next').disabled=true
+  var row=document.getElementById('hero-card')
+  if(row){row.classList.remove('flash');void row.offsetWidth;row.classList.add('flash')}
+  await post('/api/tickets/'+t.id+'/call',{windowId:wid})
+}
+
+async function recallLast(){
+  var called=myTickets().filter(function(t){return t.status==='called'})
+  if(!called.length)return
+  await post('/api/tickets/'+called[called.length-1].id+'/recall',{})
+}
+
+async function doServe(id){await post('/api/tickets/'+id+'/serve',{})}
+async function doRecall(id){await post('/api/tickets/'+id+'/recall',{})}
+async function doSkip(id){await post('/api/tickets/'+id+'/skip',{})}
+async function doNoShow(id){await post('/api/tickets/'+id+'/no-show',{})}
+
+async function callName(){
+  var inp=document.getElementById('i-name')
+  var name=inp.value.trim()
+  if(!name)return
+  var btn=document.getElementById('b-announce')
+  btn.disabled=true
+  await post('/api/call-name',{name:name,windowId:selWin()})
+  inp.value='';btn.disabled=false;inp.focus()
+}
+
+function signOut(){
+  user=null;dept=null
+  if(es){try{es.close()}catch(e){};es=null}
+  document.getElementById('i-user').value=''
+  document.getElementById('i-pass').value=''
+  document.getElementById('l-err').style.display='none'
+  document.getElementById('b-login').disabled=false
+  document.getElementById('b-login').innerHTML='Sign In &#8594;'
+  show('s-login')
+}
+
+// ── keyboard shortcuts ────────────────────────────────────────────────────────
+document.addEventListener('keydown',function(e){
+  var tag=e.target.tagName
+  if(tag==='INPUT'||tag==='SELECT'||tag==='TEXTAREA')return
+  if(e.key==='F1'){e.preventDefault();callNext()}
+  if(e.key==='F2'){e.preventDefault();recallLast()}
+})
+
+// ── init ─────────────────────────────────────────────────────────────────────
+document.getElementById('i-user').addEventListener('keydown',function(e){if(e.key==='Enter')doLogin()})
+document.getElementById('i-pass').addEventListener('keydown',function(e){if(e.key==='Enter')doLogin()})
+document.getElementById('i-name').addEventListener('keydown',function(e){if(e.key==='Enter')callName()})
 </script>
 </body>
 </html>`
