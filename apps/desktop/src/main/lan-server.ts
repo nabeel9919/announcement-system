@@ -120,8 +120,10 @@ export class LanServer {
   // ── Token persistence ────────────────────────────────────────────────────
   private initToken(): void {
     const config = readLocalConfig() as any
-    if (config.lanApiToken && typeof config.lanApiToken === 'string' && config.lanApiToken.length >= 32) {
-      this.apiToken = config.lanApiToken
+    const stored = config.lanApiToken
+    // Accept only a clean hex token — regenerate if missing, wrong type, too short, or has non-hex chars
+    if (stored && typeof stored === 'string' && stored.length >= 32 && /^[0-9a-f]+$/i.test(stored)) {
+      this.apiToken = stored
     } else {
       // Generate a 40-character hex token
       this.apiToken = Array.from({ length: 5 }, () => randomUUID().replace(/-/g, '')).join('').slice(0, 40)
@@ -821,7 +823,7 @@ input,select,button{font-family:inherit;font-size:inherit}
 </div>
 
 <script>
-const TOKEN='${this.apiToken}'
+const TOKEN=${JSON.stringify(this.apiToken||'')}
 let user=null,dept=null,cats=[],wins=[],tickets=[],es=null
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -913,7 +915,7 @@ function populateWinSel(){
 // ── SSE ───────────────────────────────────────────────────────────────────────
 function connectSSE(){
   if(es){try{es.close()}catch(e){}}
-  es=new EventSource('/api/events?token='+TOKEN)
+  es=new EventSource('/api/events?token='+encodeURIComponent(TOKEN))
   es.addEventListener('queue',function(e){
     var d=JSON.parse(e.data)
     tickets=d.tickets||[];cats=d.categories||cats;wins=d.windows||wins
