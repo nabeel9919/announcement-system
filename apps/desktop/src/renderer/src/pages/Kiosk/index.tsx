@@ -328,13 +328,37 @@ export default function KioskPage() {
 
   // ══ FEEDBACK FLOW ════════════════════════════════════════════════════════
 
-  const currentFeedbackQ = feedbackQuestions[feedbackIndex] ?? null
-  const feedbackProgress = feedbackQuestions.length > 0 ? (feedbackIndex / feedbackQuestions.length) * 100 : 0
+  /** Filter feedback questions based on prior answers (conditional branching) */
+  function visibleFeedbackQs(allQs: FeedbackQuestion[], curAnswers: FeedbackAnswerItem[]) {
+    return allQs.filter(q => {
+      if (!q.dependsOnQuestionId) return true
+      const dep = curAnswers.find(a => a.questionId === q.dependsOnQuestionId)
+      if (!dep) return false
+      if (!q.dependsOnAnswerValue) return true
+      const v = q.dependsOnAnswerValue
+      // Score-based (star/emoji): "lte:2", "gte:4", "eq:3"
+      const scoreMatch = v.match(/^(lte|gte|eq):(\d+)$/)
+      if (scoreMatch && dep.score !== undefined) {
+        const threshold = parseInt(scoreMatch[2])
+        if (scoreMatch[1] === 'lte') return dep.score <= threshold
+        if (scoreMatch[1] === 'gte') return dep.score >= threshold
+        if (scoreMatch[1] === 'eq') return dep.score === threshold
+      }
+      // Choice-based: exact option match
+      return dep.value === v
+    })
+  }
+
+  const visibleFbQs = visibleFeedbackQs(feedbackQuestions, feedbackAnswers)
+  const currentFeedbackQ = visibleFbQs[feedbackIndex] ?? null
+  const feedbackProgress = visibleFbQs.length > 0 ? (feedbackIndex / visibleFbQs.length) * 100 : 0
 
   function recordFeedbackAnswer(answer: FeedbackAnswerItem) {
     const newAnswers = [...feedbackAnswers.filter(a => a.questionId !== answer.questionId), answer]
     setFeedbackAnswers(newAnswers)
-    if (feedbackIndex + 1 < feedbackQuestions.length) { setFeedbackIndex(feedbackIndex + 1); setFeedbackText('') }
+    // Re-compute visible questions with the updated answers so branching is applied immediately
+    const nextVisible = visibleFeedbackQs(feedbackQuestions, newAnswers)
+    if (feedbackIndex + 1 < nextVisible.length) { setFeedbackIndex(feedbackIndex + 1); setFeedbackText('') }
     else submitFeedback(newAnswers)
   }
 
@@ -344,7 +368,8 @@ export default function KioskPage() {
   }
 
   function handleFeedbackSkip() {
-    if (feedbackIndex + 1 < feedbackQuestions.length) { setFeedbackIndex(feedbackIndex + 1); setFeedbackText('') }
+    const nextVisible = visibleFeedbackQs(feedbackQuestions, feedbackAnswers)
+    if (feedbackIndex + 1 < nextVisible.length) { setFeedbackIndex(feedbackIndex + 1); setFeedbackText('') }
     else submitFeedback(feedbackAnswers)
   }
 
@@ -549,7 +574,7 @@ export default function KioskPage() {
         )}
 
         {/* ══ FEEDBACK: No questions ════════════════════════════════════════ */}
-        {mode === 'feedback' && feedbackQuestions.length === 0 && (
+        {mode === 'feedback' && visibleFbQs.length === 0 && (
           <div className="flex flex-col items-center gap-6 text-center">
             <MessageSquare className="w-16 h-16 text-zinc-700" />
             <p className="text-zinc-400 text-xl">{sw ? 'Maswali ya maoni hayajaundwa.' : 'No feedback questions configured yet.'}</p>
@@ -565,7 +590,7 @@ export default function KioskPage() {
             <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
               <div className="h-full bg-amber-500 rounded-full transition-all duration-500" style={{ width: `${feedbackProgress}%` }} />
             </div>
-            <p className="text-center text-xs text-zinc-500 -mt-2 uppercase tracking-widest">{T.question} {feedbackIndex + 1} / {feedbackQuestions.length}</p>
+            <p className="text-center text-xs text-zinc-500 -mt-2 uppercase tracking-widest">{T.question} {feedbackIndex + 1} / {visibleFbQs.length}</p>
             <h2 className="text-2xl font-bold text-zinc-100 text-center leading-snug">{currentFeedbackQ.question}</h2>
 
             {currentFeedbackQ.type === 'star' && (

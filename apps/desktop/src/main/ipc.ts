@@ -131,6 +131,14 @@ function initSchema(db: Database.Database): void {
   try {
     db.exec(`ALTER TABLE tickets ADD COLUMN answers TEXT DEFAULT NULL`)
   } catch { /* column already exists */ }
+
+  // Conditional feedback question columns (migration)
+  try {
+    db.exec(`ALTER TABLE feedback_questions ADD COLUMN depends_on_question_id TEXT DEFAULT NULL`)
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE feedback_questions ADD COLUMN depends_on_answer_value TEXT DEFAULT NULL`)
+  } catch { /* column already exists */ }
 }
 
 function logAuditEvent(
@@ -754,6 +762,8 @@ export function setupIpcHandlers(): void {
       isEnabled: row.is_enabled === 1,
       isRequired: row.is_required === 1,
       createdAt: row.created_at,
+      dependsOnQuestionId: row.depends_on_question_id ?? null,
+      dependsOnAnswerValue: row.depends_on_answer_value ?? null,
     }
   }
 
@@ -772,15 +782,17 @@ export function setupIpcHandlers(): void {
   ipcMain.handle('feedback:questions.upsert', (_event, q: any) => {
     const db = getDb()
     db.prepare(`
-      INSERT INTO feedback_questions (id, question, type, options, order_index, is_enabled, is_required, created_at)
-      VALUES (@id, @question, @type, @options, @order_index, @is_enabled, @is_required, @created_at)
+      INSERT INTO feedback_questions (id, question, type, options, order_index, is_enabled, is_required, created_at, depends_on_question_id, depends_on_answer_value)
+      VALUES (@id, @question, @type, @options, @order_index, @is_enabled, @is_required, @created_at, @depends_on_question_id, @depends_on_answer_value)
       ON CONFLICT(id) DO UPDATE SET
         question = excluded.question,
         type = excluded.type,
         options = excluded.options,
         order_index = excluded.order_index,
         is_enabled = excluded.is_enabled,
-        is_required = excluded.is_required
+        is_required = excluded.is_required,
+        depends_on_question_id = excluded.depends_on_question_id,
+        depends_on_answer_value = excluded.depends_on_answer_value
     `).run({
       id: q.id,
       question: q.question,
@@ -790,6 +802,8 @@ export function setupIpcHandlers(): void {
       is_enabled: q.isEnabled !== false ? 1 : 0,
       is_required: q.isRequired ? 1 : 0,
       created_at: q.createdAt ?? new Date().toISOString(),
+      depends_on_question_id: q.dependsOnQuestionId ?? null,
+      depends_on_answer_value: q.dependsOnAnswerValue ?? null,
     })
     return mapFeedbackQuestion(db.prepare('SELECT * FROM feedback_questions WHERE id = ?').get(q.id))
   })

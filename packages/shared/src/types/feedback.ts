@@ -10,6 +10,14 @@ export interface FeedbackQuestion {
   isEnabled: boolean
   isRequired: boolean
   createdAt: string
+  /**
+   * Conditional display — only show this question when a prior question's answer matches.
+   * dependsOnAnswerValue format:
+   *   - choice questions: exact option string, e.g. "Long wait time"
+   *   - star/emoji questions: score operator, e.g. "lte:2" | "gte:4" | "eq:3"
+   */
+  dependsOnQuestionId: string | null
+  dependsOnAnswerValue: string | null
 }
 
 export interface FeedbackAnswerItem {

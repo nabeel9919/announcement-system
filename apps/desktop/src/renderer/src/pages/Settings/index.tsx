@@ -1756,6 +1756,8 @@ function emptyFeedbackQuestion(orderIndex: number): FeedbackQuestion {
     isEnabled: true,
     isRequired: false,
     createdAt: new Date().toISOString(),
+    dependsOnQuestionId: null,
+    dependsOnAnswerValue: null,
   }
 }
 
@@ -1865,9 +1867,18 @@ function FeedbackTab() {
                   {q.isRequired && (
                     <span className="text-[10px] px-1.5 py-0.5 rounded font-medium border text-red-400 bg-red-500/10 border-red-500/20">Required</span>
                   )}
+                  {q.dependsOnQuestionId && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded font-medium border text-violet-400 bg-violet-500/10 border-violet-500/20">Conditional</span>
+                  )}
                 </div>
                 {q.type === 'choice' && q.options.length > 0 && (
                   <p className="text-xs text-zinc-500 truncate">{q.options.join(' · ')}</p>
+                )}
+                {q.dependsOnQuestionId && (
+                  <p className="text-xs text-zinc-600 truncate">
+                    If: {questions.find(x => x.id === q.dependsOnQuestionId)?.question ?? '—'}
+                    {q.dependsOnAnswerValue ? ` → ${q.dependsOnAnswerValue}` : ''}
+                  </p>
                 )}
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
@@ -1953,6 +1964,65 @@ function FeedbackTab() {
                 </div>
               </div>
             )}
+
+            {/* ── Conditional display ──────────────────────────────────────── */}
+            {(() => {
+              const otherQs = questions.filter(x => x.id !== editing.id)
+              const parentQ = otherQs.find(x => x.id === editing.dependsOnQuestionId)
+              const isScoreBased = parentQ?.type === 'star' || parentQ?.type === 'emoji'
+              const SCORE_OPS = [
+                { value: 'lte:2', label: '≤ 2 (negative response)' },
+                { value: 'lte:3', label: '≤ 3 (average or below)' },
+                { value: 'gte:4', label: '≥ 4 (positive response)' },
+                { value: 'eq:1', label: '= 1 (worst)' },
+                { value: 'eq:5', label: '= 5 (best)' },
+              ]
+              return (
+                <div className="space-y-2.5">
+                  <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide">Show this question only if...</label>
+                  <select
+                    value={editing.dependsOnQuestionId ?? ''}
+                    onChange={e => setEditing({ ...editing, dependsOnQuestionId: e.target.value || null, dependsOnAnswerValue: null })}
+                    className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                  >
+                    <option value="">Always show (no condition)</option>
+                    {otherQs.map(x => (
+                      <option key={x.id} value={x.id}>{x.question}</option>
+                    ))}
+                  </select>
+                  {parentQ && (
+                    <div>
+                      <label className="block text-xs text-zinc-500 mb-1.5">Answer condition</label>
+                      {isScoreBased ? (
+                        <select
+                          value={editing.dependsOnAnswerValue ?? ''}
+                          onChange={e => setEditing({ ...editing, dependsOnAnswerValue: e.target.value || null })}
+                          className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                        >
+                          <option value="">Any answer</option>
+                          {SCORE_OPS.map(op => (
+                            <option key={op.value} value={op.value}>{op.label}</option>
+                          ))}
+                        </select>
+                      ) : parentQ.type === 'choice' ? (
+                        <select
+                          value={editing.dependsOnAnswerValue ?? ''}
+                          onChange={e => setEditing({ ...editing, dependsOnAnswerValue: e.target.value || null })}
+                          className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                        >
+                          <option value="">Any answer</option>
+                          {parentQ.options.map(opt => (
+                            <option key={opt} value={opt}>{opt}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <p className="text-xs text-zinc-600 italic">Text questions show when parent was answered</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
 
             <label className="flex items-center gap-3 cursor-pointer select-none">
               <div onClick={() => setEditing({ ...editing, isRequired: !editing.isRequired })}
