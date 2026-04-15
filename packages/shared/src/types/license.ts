@@ -64,6 +64,12 @@ export interface InstallationConfig {
     color: string
     prefix: string
   }>
+  /** Customisable announcement phrase templates. Use {number}, {window}, {name} as placeholders. */
+  announcementPhrases?: {
+    ticket: string   // e.g. "Tangazo. Mwenye tiketi, {number}, tafadhali elekea {window}."
+    card: string     // e.g. "Tangazo. Mwenye kadi, {number}, tafadhali elekea {window}."
+    name: string     // e.g. "Tangazo. {name}, tafadhali elekea {window}."
+  }
 }
 
 export type SupportedLanguage = 'en' | 'sw' | 'ar' | 'fr'

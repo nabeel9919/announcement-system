@@ -43,7 +43,21 @@ function expandNumber(n: string): string {
   }).join(', ')
 }
 
-function buildAnnouncementText(displayNumber: string, windowLabel: string, lang: string, mode: 'ticket' | 'card' | 'name'): string {
+function buildAnnouncementText(
+  displayNumber: string,
+  windowLabel: string,
+  lang: string,
+  mode: 'ticket' | 'card' | 'name',
+  phrases?: { ticket: string; card: string; name: string },
+): string {
+  if (phrases) {
+    const expanded = expandNumber(displayNumber)
+    const tmpl = mode === 'name' ? phrases.name : mode === 'card' ? phrases.card : phrases.ticket
+    if (tmpl) return tmpl
+      .replace('{number}', mode === 'name' ? displayNumber : expanded)
+      .replace('{name}', displayNumber)
+      .replace('{window}', windowLabel)
+  }
   if (mode === 'name') {
     switch (lang) {
       case 'sw': return `Tangazo. ${displayNumber}, tafadhali elekea ${windowLabel}.`
@@ -521,8 +535,16 @@ export class LanServer {
     const win = this.getOperatorWindow()
     if (!win || win.isDestroyed()) return
     const lang = this.getLanguage()
-    const text = buildAnnouncementText(displayNumber, windowLabel, lang, mode)
+    const phrases = this.getPhrases()
+    const text = buildAnnouncementText(displayNumber, windowLabel, lang, mode, phrases)
     win.webContents.send('lan:announce', { text, displayNumber, windowId })
+  }
+
+  private getPhrases(): { ticket: string; card: string; name: string } | undefined {
+    try {
+      const cfg = readLocalConfig()
+      return (cfg.installationConfig as any)?.announcementPhrases
+    } catch { return undefined }
   }
 
   private getLanguage(): string {

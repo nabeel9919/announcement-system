@@ -69,6 +69,11 @@ export default function SettingsPage() {
   const [audioRecallSec, setAudioRecallSec] = useState<number>(config?.autoRecallAfterSeconds ?? 90)
   const [audioMaxRecalls, setAudioMaxRecalls] = useState<number>(config?.maxAutoRecalls ?? 2)
   const [audioProvider, setAudioProvider] = useState<string>((config as any)?.provider ?? 'web_speech')
+  const defaultPhrases = { ticket: '', card: '', name: '' }
+  const savedPhrases = (config as any)?.announcementPhrases ?? defaultPhrases
+  const [phraseTicket, setPhraseTicket] = useState<string>(savedPhrases.ticket)
+  const [phraseCard, setPhraseCard] = useState<string>(savedPhrases.card)
+  const [phraseName, setPhraseName] = useState<string>(savedPhrases.name)
   const [piperAvailable, setPiperAvailable] = useState<boolean | null>(null)
   const [audioSaving, setAudioSaving] = useState(false)
   const [audioSaved, setAudioSaved] = useState(false)
@@ -212,6 +217,9 @@ export default function SettingsPage() {
       secondLanguage: audioSecondLang || undefined,
       autoRecallAfterSeconds: audioRecallSec,
       maxAutoRecalls: audioMaxRecalls,
+      announcementPhrases: (phraseTicket || phraseCard || phraseName)
+        ? { ticket: phraseTicket, card: phraseCard, name: phraseName }
+        : undefined,
     }
     await window.api.config.write({ isSetupComplete: true, installationConfig: updated })
     setConfig(updated)
@@ -536,6 +544,35 @@ export default function SettingsPage() {
                     After {audioMaxRecalls} auto-recall{audioMaxRecalls !== 1 ? 's' : ''}, ticket is marked as skipped
                   </p>
                 </div>
+              </div>
+
+              {/* Announcement Phrase Templates */}
+              <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 space-y-4">
+                <div>
+                  <p className="text-sm font-semibold text-zinc-200">Announcement Phrases</p>
+                  <p className="text-xs text-zinc-500 mt-1">
+                    Customise the spoken text. Use <code className="bg-zinc-800 px-1 rounded text-zinc-300">{'{number}'}</code>,{' '}
+                    <code className="bg-zinc-800 px-1 rounded text-zinc-300">{'{window}'}</code>,{' '}
+                    <code className="bg-zinc-800 px-1 rounded text-zinc-300">{'{name}'}</code> as placeholders.
+                    Leave blank to use the default for the selected language.
+                  </p>
+                </div>
+                {[
+                  { label: 'Ticket call', placeholder: 'e.g. Tangazo. Mwenye tiketi, {number}, tafadhali elekea {window}.', value: phraseTicket, onChange: setPhraseTicket },
+                  { label: 'Card call', placeholder: 'e.g. Tangazo. Mwenye kadi, {number}, tafadhali elekea {window}.', value: phraseCard, onChange: setPhraseCard },
+                  { label: 'Name call', placeholder: 'e.g. Tangazo. {name}, tafadhali elekea {window}.', value: phraseName, onChange: setPhraseName },
+                ].map(({ label, placeholder, value, onChange }) => (
+                  <div key={label}>
+                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">{label}</label>
+                    <input
+                      type="text"
+                      value={value}
+                      onChange={(e) => onChange(e.target.value)}
+                      placeholder={placeholder}
+                      className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                    />
+                  </div>
+                ))}
               </div>
 
               {/* Actions */}

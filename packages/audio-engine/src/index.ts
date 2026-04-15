@@ -191,6 +191,8 @@ export function buildAnnouncementText(params: {
   announcementPrefix?: string   // legacy, ignored when language templates are used
   language?: string
   mode?: 'ticket' | 'card' | 'name'
+  /** Custom phrase templates — override hardcoded language strings when provided */
+  phrases?: { ticket: string; card: string; name: string }
 }): string {
   const {
     displayNumber,
@@ -198,6 +200,7 @@ export function buildAnnouncementText(params: {
     calleeName,
     language = 'en',
     mode,
+    phrases,
   } = params
 
   const lang = language.split('-')[0].toLowerCase()
@@ -205,6 +208,20 @@ export function buildAnnouncementText(params: {
   // Determine actual mode
   const resolvedMode: 'ticket' | 'card' | 'name' =
     mode ?? (calleeName && !displayNumber ? 'name' : calleeName ? 'name' : 'ticket')
+
+  // Use custom phrases if provided (template substitution)
+  if (phrases) {
+    const expanded = expandTicketNumber(displayNumber)
+    const tmpl = resolvedMode === 'name'
+      ? phrases.name
+      : resolvedMode === 'card'
+        ? phrases.card
+        : phrases.ticket
+    return tmpl
+      .replace('{number}', resolvedMode === 'name' ? (calleeName ?? displayNumber) : expanded)
+      .replace('{name}', calleeName ?? displayNumber)
+      .replace('{window}', windowLabel)
+  }
 
   if (resolvedMode === 'name') {
     return buildNameText(calleeName ?? displayNumber, windowLabel, lang)

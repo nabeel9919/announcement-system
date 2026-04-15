@@ -367,6 +367,7 @@ export default function OperatorPage() {
                 windowLabel: win?.label ?? 'Counter',
                 language: appLang(),
                 mode: ticket.calleeName ? 'name' : 'ticket',
+                phrases: appPhrases(),
               })
               announce(text, ticket.displayNumber)
               scheduleRecall(recallSec * 1000)
@@ -405,6 +406,10 @@ export default function OperatorPage() {
   function appLang(): string {
     const map: Record<string, string> = { sw: 'sw-TZ', ar: 'ar-SA', fr: 'fr-FR', en: 'en-US' }
     return map[config?.language ?? 'en'] ?? 'en-US'
+  }
+
+  function appPhrases() {
+    return (config as any)?.announcementPhrases as { ticket: string; card: string; name: string } | undefined
   }
 
   async function refreshScreens() {
@@ -458,7 +463,7 @@ export default function OperatorPage() {
     const windowLabel = win?.label ?? 'Counter'
     await window.api.tickets.call(next.id, selectedWindowId)
     updateTicket(next.id, { status: 'called', windowId: selectedWindowId, calledAt: new Date().toISOString() })
-    const text = buildAnnouncementText({ displayNumber: next.displayNumber, windowLabel, calleeName: next.calleeName, language: appLang(), mode: next.calleeName ? 'name' : 'ticket' })
+    const text = buildAnnouncementText({ displayNumber: next.displayNumber, windowLabel, calleeName: next.calleeName, language: appLang(), mode: next.calleeName ? 'name' : 'ticket', phrases: appPhrases() })
     announce(text, next.displayNumber)
     refreshStats()
     setCenterTab('called')
@@ -469,14 +474,14 @@ export default function OperatorPage() {
     if (!ticket) return
     const windowLabel = windows.find((w) => w.id === selectedWindowId)?.label ?? 'Counter'
     await window.api.tickets.recall(ticketId)
-    const text = buildAnnouncementText({ displayNumber: ticket.displayNumber, windowLabel, calleeName: ticket.calleeName, language: appLang(), mode: ticket.calleeName ? 'name' : 'ticket' })
+    const text = buildAnnouncementText({ displayNumber: ticket.displayNumber, windowLabel, calleeName: ticket.calleeName, language: appLang(), mode: ticket.calleeName ? 'name' : 'ticket', phrases: appPhrases() })
     announce(text, ticket.displayNumber)
   }
 
   function callByName() {
     if (!nameInput.trim()) return
     const windowLabel = windows.find((w) => w.id === selectedWindowId)?.label ?? 'Counter'
-    const text = buildAnnouncementText({ displayNumber: '', windowLabel, calleeName: nameInput.trim(), language: appLang(), mode: 'name' })
+    const text = buildAnnouncementText({ displayNumber: '', windowLabel, calleeName: nameInput.trim(), language: appLang(), mode: 'name', phrases: appPhrases() })
     announce(text, nameInput.trim())
     setNameInput('')
   }
@@ -484,7 +489,7 @@ export default function OperatorPage() {
   function callByCard() {
     if (!cardInput.trim()) return
     const windowLabel = windows.find((w) => w.id === selectedWindowId)?.label ?? 'Counter'
-    const text = buildAnnouncementText({ displayNumber: cardInput.trim(), windowLabel, language: appLang(), mode: 'card' })
+    const text = buildAnnouncementText({ displayNumber: cardInput.trim(), windowLabel, language: appLang(), mode: 'card', phrases: appPhrases() })
     announce(text, cardInput.trim())
     setCardInput('')
   }
