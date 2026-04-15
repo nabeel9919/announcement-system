@@ -23,6 +23,8 @@ interface AppStore {
   settingsInitialTab: string | null
   /** Currently logged-in user (null = not logged in / legacy PIN mode) */
   activeUser: ActiveUser | null
+  /** Department (category) the current operator is working in — null means all */
+  activeCategoryId: string | null
 
   setPage: (page: AppPage) => void
   setConfig: (config: InstallationConfig) => void
@@ -33,6 +35,7 @@ interface AppStore {
   setOperatorSession: (name: string, windowId: string) => void
   setSettingsInitialTab: (tab: string | null) => void
   setActiveUser: (user: ActiveUser | null) => void
+  setActiveCategoryId: (id: string | null) => void
 }
 
 export const useAppStore = create<AppStore>((set) => ({
@@ -46,6 +49,7 @@ export const useAppStore = create<AppStore>((set) => ({
   operatorWindowId: '',
   settingsInitialTab: null,
   activeUser: null,
+  activeCategoryId: null,
 
   setPage: (page) => set({ page }),
   setConfig: (config) => set({ config }),
@@ -56,4 +60,5 @@ export const useAppStore = create<AppStore>((set) => ({
   setOperatorSession: (operatorName, operatorWindowId) => set({ operatorName, operatorWindowId }),
   setSettingsInitialTab: (settingsInitialTab) => set({ settingsInitialTab }),
   setActiveUser: (activeUser) => set({ activeUser }),
+  setActiveCategoryId: (activeCategoryId) => set({ activeCategoryId }),
 }))

@@ -10,7 +10,7 @@ import {
   RefreshCw, Bell, ChevronDown, Plus, Mic, CreditCard, Printer, Tablet,
   Settings, BarChart2, Download, ArrowUpCircle, Wifi, Lock, Unlock,
   Shield, X, ChevronRight, Activity, Clock, Users, CheckCircle2,
-  AlertCircle, Zap, Hash, Film, UserX
+  AlertCircle, Zap, Hash, Film, UserX, Building2, ChevronUp
 } from 'lucide-react'
 
 // ── Admin PIN modal ──────────────────────────────────────────────────────────
@@ -107,9 +107,89 @@ function StatCard({ label, value, color, icon: Icon }: {
   )
 }
 
+// ── Department Picker ────────────────────────────────────────────────────────
+function DepartmentPicker({
+  categories,
+  tickets,
+  displayName,
+  canViewAll,
+  onSelect,
+  onViewAll,
+}: {
+  categories: QueueCategory[]
+  tickets: QueueTicket[]
+  displayName: string
+  canViewAll: boolean
+  onSelect: (id: string) => void
+  onViewAll: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-40 flex flex-col items-center justify-center bg-[#0a0a0f] overflow-y-auto">
+      <div className="w-full max-w-md px-6 py-8">
+        {/* Header */}
+        <div className="text-center mb-8">
+          <div className="w-14 h-14 rounded-2xl bg-indigo-600 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-indigo-600/30">
+            <Building2 className="w-7 h-7 text-white" />
+          </div>
+          <h1 className="text-xl font-bold text-zinc-100">Chagua Idara Yako</h1>
+          <p className="text-sm text-zinc-500 mt-1">
+            Karibu, <span className="text-zinc-300 font-medium">{displayName}</span> — chagua idara yako kuendelea
+          </p>
+        </div>
+
+        {/* Category cards */}
+        <div className="space-y-2">
+          {categories.map((cat) => {
+            const waitCount = tickets.filter((t) => t.status === 'waiting' && t.categoryId === cat.id).length
+            return (
+              <button
+                key={cat.id}
+                onClick={() => onSelect(cat.id)}
+                className="w-full flex items-center gap-4 rounded-xl border border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800/60 hover:border-zinc-700 px-5 py-4 text-left transition-all group"
+              >
+                <div
+                  className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 font-bold text-sm"
+                  style={{ background: `${cat.color}20`, border: `1px solid ${cat.color}40`, color: cat.color }}
+                >
+                  {cat.code}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-zinc-100">{cat.label}</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">
+                    {waitCount > 0
+                      ? <span className="text-amber-400 font-medium">{waitCount} wanasubiri</span>
+                      : <span>Hakuna wanasubiri</span>}
+                  </p>
+                </div>
+                <ChevronRight className="w-4 h-4 text-zinc-600 group-hover:text-zinc-300 transition-colors flex-shrink-0" />
+              </button>
+            )
+          })}
+          {categories.length === 0 && (
+            <p className="text-center text-zinc-600 text-sm py-8">
+              Hakuna idara zilizowekwa. Nenda kwenye Mipangilio ili kuongeza.
+            </p>
+          )}
+        </div>
+
+        {/* Admin bypass */}
+        {canViewAll && (
+          <button
+            onClick={onViewAll}
+            className="w-full mt-4 rounded-xl border border-zinc-700/50 bg-transparent hover:bg-zinc-800/40 px-5 py-3 text-xs text-zinc-500 hover:text-zinc-300 transition-colors text-center flex items-center justify-center gap-2"
+          >
+            <Users className="w-3.5 h-3.5" />
+            Angalia idara zote (supervisor mode)
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Main component ───────────────────────────────────────────────────────────
 export default function OperatorPage() {
-  const { config, setPage, updateAvailable, updateDownloaded, operatorWindowId, setSettingsInitialTab, activeUser, setActiveUser } = useAppStore()
+  const { config, setPage, updateAvailable, updateDownloaded, operatorWindowId, setSettingsInitialTab, activeUser, setActiveUser, activeCategoryId, setActiveCategoryId } = useAppStore()
   const {
     tickets, windows, categories,
     setTickets, setWindows, setCategories, setStats, stats,
@@ -136,6 +216,9 @@ export default function OperatorPage() {
   const [showPinModal, setShowPinModal] = useState(false)
   const [pendingAdminAction, setPendingAdminAction] = useState<(() => void) | null>(null)
   const adminTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Department picker overlay
+  const [showDeptPicker, setShowDeptPicker] = useState(false)
 
   // Active view tab in center panel
   const [centerTab, setCenterTab] = useState<'call' | 'called'>('call')
@@ -203,6 +286,8 @@ export default function OperatorPage() {
       const preferred = operatorWindowId && allWins.find((w) => w.id === operatorWindowId)
       setSelectedWindowId(preferred ? preferred.id : (allWins[0]?.id ?? ''))
       setIsLoading(false)
+      // Show department picker if no dept has been selected yet this session
+      if (useAppStore.getState().activeCategoryId === null) setShowDeptPicker(true)
     }
     load()
   }, [])
@@ -363,7 +448,10 @@ export default function OperatorPage() {
   }
 
   async function callNext() {
-    const waiting = waitingTickets()
+    const all = waitingTickets()
+    const waiting = activeCategoryId && activeCategoryId !== '__ALL__'
+      ? all.filter((t) => t.categoryId === activeCategoryId)
+      : all
     if (waiting.length === 0) return
     const next = waiting[0]
     const win = windows.find((w) => w.id === selectedWindowId)
@@ -462,9 +550,15 @@ export default function OperatorPage() {
   }, []) // empty — stable listener, reads from refs
 
   const mode = config?.callingMode ?? 'hybrid'
-  const waiting = waitingTickets()
-  const called = calledTickets()
+  const isDeptFiltered = !!activeCategoryId && activeCategoryId !== '__ALL__'
+  const waiting = isDeptFiltered
+    ? waitingTickets().filter((t) => t.categoryId === activeCategoryId)
+    : waitingTickets()
+  const called = isDeptFiltered
+    ? calledTickets().filter((t) => t.categoryId === activeCategoryId)
+    : calledTickets()
   const selectedWin = windows.find((w) => w.id === selectedWindowId)
+  const activeCategory = categories.find((c) => c.id === activeCategoryId)
 
   if (isLoading) {
     return (
@@ -487,6 +581,24 @@ export default function OperatorPage() {
             if (pendingAdminAction) { pendingAdminAction(); setPendingAdminAction(null) }
           }}
           onClose={() => { setShowPinModal(false); setPendingAdminAction(null) }}
+        />
+      )}
+
+      {/* ══ DEPARTMENT PICKER ════════════════════════════════════════════════ */}
+      {showDeptPicker && (
+        <DepartmentPicker
+          categories={categories}
+          tickets={tickets}
+          displayName={activeUser?.displayName ?? 'Operator'}
+          canViewAll={isSupervisor}
+          onSelect={(id) => {
+            setActiveCategoryId(id)
+            setShowDeptPicker(false)
+          }}
+          onViewAll={() => {
+            setActiveCategoryId('__ALL__')
+            setShowDeptPicker(false)
+          }}
         />
       )}
 
@@ -518,6 +630,22 @@ export default function OperatorPage() {
           </select>
           <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-500 pointer-events-none" />
         </div>
+
+        {/* Active department badge */}
+        {!showDeptPicker && (
+          <button
+            onClick={() => setShowDeptPicker(true)}
+            className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800/50 hover:bg-zinc-800 px-2.5 py-1.5 text-xs font-medium transition-colors flex-shrink-0"
+            title="Change department"
+            style={activeCategory ? { color: activeCategory.color, borderColor: `${activeCategory.color}40`, background: `${activeCategory.color}10` } : {}}
+          >
+            <Building2 className="w-3 h-3" />
+            <span className="hidden sm:inline">
+              {activeCategory ? activeCategory.label : activeCategoryId === '__ALL__' ? 'All Depts' : 'Select Dept'}
+            </span>
+            <ChevronUp className="w-3 h-3 opacity-50" />
+          </button>
+        )}
 
         {/* Spacer */}
         <div className="flex-1" />
@@ -586,7 +714,7 @@ export default function OperatorPage() {
               <span className="hidden sm:inline capitalize">{activeUser.role}</span>
             </div>
             <button
-              onClick={() => { setActiveUser(null); setPage('login') }}
+              onClick={() => { setActiveUser(null); setActiveCategoryId(null); setPage('login') }}
               title="Sign out"
               className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs border border-zinc-700 bg-zinc-800/50 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
             >
@@ -650,12 +778,20 @@ export default function OperatorPage() {
             <p className="text-[10px] font-semibold text-zinc-600 uppercase tracking-widest mb-2">Queue</p>
             <div className="space-y-1">
               {categories.map((cat) => {
-                const count = waiting.filter((t) => t.categoryId === cat.id).length
+                const count = waitingTickets().filter((t) => t.categoryId === cat.id).length
+                const isActive = cat.id === activeCategoryId
                 return (
-                  <div key={cat.id} className="flex items-center justify-between rounded-lg px-2.5 py-1.5 bg-zinc-800/30 hover:bg-zinc-800/50 transition-colors">
+                  <div
+                    key={cat.id}
+                    className={cn(
+                      'flex items-center justify-between rounded-lg px-2.5 py-1.5 transition-colors',
+                      isActive ? 'bg-zinc-700/50' : 'bg-zinc-800/30 hover:bg-zinc-800/50'
+                    )}
+                    style={isActive ? { borderLeft: `2px solid ${cat.color}`, paddingLeft: '8px' } : {}}
+                  >
                     <div className="flex items-center gap-2 min-w-0">
                       <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: cat.color }} />
-                      <span className="text-xs text-zinc-400 truncate">{cat.label}</span>
+                      <span className={cn('text-xs truncate', isActive ? 'text-zinc-200 font-medium' : 'text-zinc-400')}>{cat.label}</span>
                     </div>
                     <span className={cn('text-xs font-bold tabular-nums', count > 0 ? 'text-amber-400' : 'text-zinc-600')}>{count}</span>
                   </div>
@@ -706,7 +842,9 @@ export default function OperatorPage() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-medium text-zinc-300 truncate">{activeUser.displayName}</p>
-                  <p className="text-[10px] text-zinc-600 capitalize">{activeUser.role}</p>
+                  <p className="text-[10px] capitalize truncate" style={activeCategory ? { color: activeCategory.color } : { color: '' }}>
+                    {activeCategory ? activeCategory.label : activeCategoryId === '__ALL__' ? 'All Depts' : activeUser.role}
+                  </p>
                 </div>
               </div>
             )}
@@ -859,8 +997,8 @@ export default function OperatorPage() {
                     <div>
                       <p className="text-[10px] font-semibold text-zinc-600 uppercase tracking-widest mb-2">Issue Ticket</p>
                       <div className="flex flex-wrap gap-2">
-                        {categories.map((cat) => {
-                          const count = waiting.filter((t) => t.categoryId === cat.id).length
+                        {categories.filter((cat) => !isDeptFiltered || cat.id === activeCategoryId).map((cat) => {
+                          const count = waitingTickets().filter((t) => t.categoryId === cat.id).length
                           return (
                             <button
                               key={cat.id}
@@ -1045,7 +1183,14 @@ export default function OperatorPage() {
         {/* ── RIGHT PANEL: Waiting Queue ─────────────────────────────────── */}
         <aside className="w-60 min-w-[220px] border-l border-zinc-800/80 bg-zinc-900/30 flex flex-col">
           <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800/80 flex-shrink-0">
-            <p className="text-[10px] font-semibold text-zinc-600 uppercase tracking-widest">Waiting</p>
+            <div>
+              <p className="text-[10px] font-semibold text-zinc-600 uppercase tracking-widest">Waiting</p>
+              {activeCategory && (
+                <p className="text-[9px] font-medium mt-0.5 truncate" style={{ color: activeCategory.color }}>
+                  {activeCategory.label}
+                </p>
+              )}
+            </div>
             <span className={cn('text-sm font-bold tabular-nums', waiting.length > 0 ? 'text-amber-400' : 'text-zinc-700')}>
               {waiting.length}
             </span>
