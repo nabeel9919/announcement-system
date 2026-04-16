@@ -317,8 +317,10 @@ export class LanServer {
       return
     }
 
-    // ── Bearer-token check for ALL write endpoints ───────────────────────────
-    if (method === 'POST') {
+    // ── Bearer-token check for operator write endpoints ──────────────────────
+    // Kiosk POST endpoints (/api/kiosk/*) use the kiosk token — handled separately below.
+    const isKioskPost = method === 'POST' && (path === '/api/kiosk/issue' || path === '/api/kiosk/feedback')
+    if (method === 'POST' && !isKioskPost) {
       if (!this.checkAuth(req)) {
         this.recordFailure(ip)
         reply(401, { error: 'Unauthorized. Include "Authorization: Bearer <token>" header.' })
@@ -576,7 +578,8 @@ export class LanServer {
       const t = url.searchParams.get('token')
       if (!this.validKioskToken(t)) {
         this.recordFailure(ip)
-        reply(401, { error: 'Unauthorized' })
+        console.warn(`[KIOSK] /api/kiosk/config: token mismatch from ${ip}. Got: ${t?.slice(0,8) ?? 'null'}…  Expected: ${this.kioskToken.slice(0,8)}…`)
+        reply(401, { error: 'Invalid kiosk token. Regenerate the kiosk URL from Settings → Kiosk Tablets.' })
         return
       }
       this.clearFailures(ip)
@@ -963,8 +966,22 @@ function scheduleReset(ms) {
 // ── Init / Load ──────────────────────────────────────────────────────────────
 function init() {
   show("s-loading")
+  if (!TOKEN) {
+    document.getElementById("err-msg").textContent = "No kiosk token in URL. Open the URL from Settings \u2192 Kiosk Tablets."
+    show("s-err")
+    return
+  }
   fetch("/api/kiosk/config?token=" + encodeURIComponent(TOKEN))
-    .then(function(r) { return r.json() })
+    .then(function(r) {
+      if (!r.ok) {
+        return r.json().then(function(body) {
+          throw new Error("HTTP " + r.status + ": " + (body.error || r.statusText))
+        }).catch(function() {
+          throw new Error("HTTP " + r.status + " " + r.statusText)
+        })
+      }
+      return r.json()
+    })
     .then(function(cfg) {
       categories        = cfg.categories || []
       kioskQuestions    = cfg.kioskQuestions || []
@@ -975,7 +992,7 @@ function init() {
       show("s-cats")
     })
     .catch(function(e) {
-      document.getElementById("err-msg").textContent = "Could not connect to server. (" + e.message + ")"
+      document.getElementById("err-msg").textContent = e.message || "Could not connect to server."
       show("s-err")
     })
 }
