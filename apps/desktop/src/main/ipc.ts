@@ -119,6 +119,15 @@ function initSchema(db: Database.Database): void {
       answers TEXT NOT NULL DEFAULT '[]'
     );
 
+    CREATE TABLE IF NOT EXISTS kiosk_terminals (
+      id TEXT PRIMARY KEY,
+      number INTEGER NOT NULL,
+      label TEXT NOT NULL,
+      location TEXT,
+      is_enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
     CREATE INDEX IF NOT EXISTS idx_tickets_category ON tickets(category_id);
     CREATE INDEX IF NOT EXISTS idx_call_log_date ON call_log(called_at);
@@ -584,9 +593,14 @@ export function setupIpcHandlers(): void {
 
   ipcMain.handle('lan:getToken', () => (lanTokenGetter ? lanTokenGetter() : ''))
 
+  let lanKioskTokenGetter: (() => string) | null = null
+
+  ipcMain.handle('lan:getKioskToken', () => (lanKioskTokenGetter ? lanKioskTokenGetter() : ''))
+
   // Called by index.ts to register the URL getter after server starts
   ;(global as any).__setLanUrlGetter = (fn: () => string | null) => { lanUrlGetter = fn }
   ;(global as any).__setLanTokenGetter = (fn: () => string) => { lanTokenGetter = fn }
+  ;(global as any).__setLanKioskTokenGetter = (fn: () => string) => { lanKioskTokenGetter = fn }
 
   // ─── Piper TTS ────────────────────────────────────────────────────────────
 
@@ -747,6 +761,49 @@ export function setupIpcHandlers(): void {
     db.transaction(() => {
       ids.forEach((id, i) => update.run(i, id))
     })()
+    return { success: true }
+  })
+
+  // ─── Kiosk Terminals ──────────────────────────────────────────────────────
+
+  function mapKioskTerminal(row: any) {
+    return {
+      id: row.id,
+      number: row.number,
+      label: row.label,
+      location: row.location ?? null,
+      isEnabled: row.is_enabled === 1,
+      createdAt: row.created_at,
+    }
+  }
+
+  ipcMain.handle('kiosk:terminals.list', () => {
+    return getDb().prepare('SELECT * FROM kiosk_terminals ORDER BY number ASC').all().map(mapKioskTerminal)
+  })
+
+  ipcMain.handle('kiosk:terminals.upsert', (_event, t: any) => {
+    const db = getDb()
+    db.prepare(`
+      INSERT INTO kiosk_terminals (id, number, label, location, is_enabled, created_at)
+      VALUES (@id, @number, @label, @location, @is_enabled, @created_at)
+      ON CONFLICT(id) DO UPDATE SET
+        number    = excluded.number,
+        label     = excluded.label,
+        location  = excluded.location,
+        is_enabled = excluded.is_enabled
+    `).run({
+      id:         t.id,
+      number:     t.number,
+      label:      t.label,
+      location:   t.location ?? null,
+      is_enabled: t.isEnabled !== false ? 1 : 0,
+      created_at: t.createdAt ?? new Date().toISOString(),
+    })
+    return mapKioskTerminal(db.prepare('SELECT * FROM kiosk_terminals WHERE id = ?').get(t.id))
+  })
+
+  ipcMain.handle('kiosk:terminals.delete', (_event, id: string) => {
+    getDb().prepare('DELETE FROM kiosk_terminals WHERE id = ?').run(id)
     return { success: true }
   })
 

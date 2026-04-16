@@ -21,6 +21,18 @@ export interface KioskQuestion {
   createdAt: string
 }
 
+export interface KioskTerminal {
+  id: string
+  /** Display number, e.g. 1, 2, 3 */
+  number: number
+  /** Friendly name shown in settings, e.g. "Kiosk 1" */
+  label: string
+  /** Physical location, e.g. "Main Entrance" */
+  location: string | null
+  isEnabled: boolean
+  createdAt: string
+}
+
 export interface KioskAnswer {
   questionId: string
   /** Full question text (for printing) */

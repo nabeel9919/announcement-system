@@ -99,6 +99,7 @@ app.whenReady().then(async () => {
     // Register URL and token getters so ipc.ts can return them
     ;(global as any).__setLanUrlGetter(() => lanServer?.getUrl() ?? null)
     ;(global as any).__setLanTokenGetter(() => lanServer?.getToken() ?? '')
+    ;(global as any).__setLanKioskTokenGetter(() => lanServer?.getKioskToken() ?? '')
   }).catch((err) => {
     console.error('[LAN] Failed to start:', err)
   })

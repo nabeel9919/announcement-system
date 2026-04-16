@@ -9,12 +9,12 @@ import {
   Building2, Monitor, Layers, Printer, Volume2, AlertTriangle, Globe, Music2,
   Film, GripVertical, FolderOpen, Users, Eye, EyeOff, ShieldCheck,
   HelpCircle, ChevronUp, ChevronDown, ToggleLeft, ToggleRight, GitBranch,
-  Star, MessageSquare
+  Star, MessageSquare, Tablet, Copy, Check
 } from 'lucide-react'
 import { WebSpeechProvider, PiperProvider, buildAnnouncementText } from '@announcement/audio-engine'
-import type { UserRole, SystemUser, KioskQuestion, FeedbackQuestion } from '@announcement/shared'
+import type { UserRole, SystemUser, KioskQuestion, FeedbackQuestion, KioskTerminal } from '@announcement/shared'
 
-type Tab = 'org' | 'audio' | 'categories' | 'windows' | 'printer' | 'broadcast' | 'server' | 'media' | 'users' | 'kiosk' | 'feedback'
+type Tab = 'org' | 'audio' | 'categories' | 'windows' | 'printer' | 'broadcast' | 'server' | 'media' | 'users' | 'kiosk' | 'feedback' | 'terminals'
 
 const COLORS = [
   '#4F46E5', '#0EA5E9', '#10B981', '#F59E0B',
@@ -97,6 +97,12 @@ export default function SettingsPage() {
   const [lanToken, setLanToken] = useState('')
   const [lanTokenCopied, setLanTokenCopied] = useState(false)
 
+  // ── Kiosk Terminals
+  const [terminals, setTerminals] = useState<KioskTerminal[]>([])
+  const [kioskToken, setKioskToken] = useState('')
+  const [termForm, setTermForm] = useState<KioskTerminal | null>(null)
+  const [termCopied, setTermCopied] = useState<string | null>(null)
+
   // ── Media / Videos
   const [videos, setVideos] = useState<{ name: string; fileUrl: string; size: number }[]>([])
   const [videosDir, setVideosDir] = useState('')
@@ -109,12 +115,16 @@ export default function SettingsPage() {
       window.api.config.getServerUrl(),
       window.api.lan.getUrl(),
       window.api.lan.getToken(),
-    ]).then(([cats, wins, url, lUrl, lToken]) => {
+      window.api.lan.getKioskToken(),
+      window.api.kioskTerminals.list(),
+    ]).then(([cats, wins, url, lUrl, lToken, kToken, terms]) => {
       setCategories(cats as QueueCategory[])
       setWindows(wins as ServiceWindow[])
       setServerUrl(url as string)
       setLanUrl(lUrl as string | null)
       setLanToken(lToken as string)
+      setKioskToken(kToken as string)
+      setTerminals(terms as KioskTerminal[])
     })
     // Load voices for audio tab
     WebSpeechProvider.getVoices().then(setVoices)
@@ -303,6 +313,39 @@ export default function SettingsPage() {
     }
   }
 
+  // ── Terminal CRUD
+  function emptyTerminal(): KioskTerminal {
+    const nextNum = terminals.length > 0 ? Math.max(...terminals.map(t => t.number)) + 1 : 1
+    return { id: generateId(), number: nextNum, label: `Kiosk ${nextNum}`, location: null, isEnabled: true, createdAt: new Date().toISOString() }
+  }
+
+  async function saveTerm() {
+    if (!termForm) return
+    const saved = await window.api.kioskTerminals.upsert(termForm) as KioskTerminal
+    setTerminals(prev => prev.some(t => t.id === saved.id) ? prev.map(t => t.id === saved.id ? saved : t) : [...prev, saved])
+    setTermForm(null)
+  }
+
+  async function deleteTerm(id: string) {
+    if (!confirm('Remove this kiosk terminal? The tablet will lose access.')) return
+    await window.api.kioskTerminals.delete(id)
+    setTerminals(prev => prev.filter(t => t.id !== id))
+  }
+
+  function kioskUrl(terminal: KioskTerminal): string {
+    if (!lanUrl || !kioskToken) return ''
+    return `${lanUrl}/kiosk?token=${kioskToken}&kid=${terminal.number}&label=${encodeURIComponent(terminal.label)}`
+  }
+
+  function copyKioskUrl(terminal: KioskTerminal) {
+    const url = kioskUrl(terminal)
+    if (!url) return
+    navigator.clipboard.writeText(url).then(() => {
+      setTermCopied(terminal.id)
+      setTimeout(() => setTermCopied(null), 2000)
+    })
+  }
+
   const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
     { id: 'org', label: 'Organization', icon: Building2 },
     { id: 'audio', label: 'Audio', icon: Music2 },
@@ -312,6 +355,7 @@ export default function SettingsPage() {
     { id: 'users', label: 'Staff & Roles', icon: Users },
     { id: 'kiosk', label: 'Kiosk Flow', icon: HelpCircle },
     { id: 'feedback', label: 'Feedback', icon: Star },
+    { id: 'terminals', label: 'Kiosk Tablets', icon: Tablet },
     { id: 'printer', label: 'Printer', icon: Printer },
     { id: 'broadcast', label: 'Emergency', icon: AlertTriangle },
     { id: 'server', label: 'Server', icon: Globe },
@@ -1038,6 +1082,175 @@ export default function SettingsPage() {
 
         {/* ── Staff & Roles ─────────────────────────────────────────────────── */}
         {tab === 'users' && <UsersTab />}
+
+        {/* ── Kiosk Tablets ─────────────────────────────────────────────────── */}
+        {tab === 'terminals' && (
+          <div className="max-w-2xl">
+            <div className="flex items-center justify-between mb-1">
+              <div>
+                <h1 className="text-xl font-bold text-zinc-100">Kiosk Tablets</h1>
+                <p className="text-sm text-zinc-500 mt-1">
+                  Each tablet opens its unique URL in a browser to get the self-service kiosk.
+                  All tablets on the same WiFi network can access the server at{' '}
+                  <span className="font-mono text-zinc-300">{lanUrl ?? 'http://&lt;ip&gt;:4000'}</span>.
+                </p>
+              </div>
+              <button
+                onClick={() => setTermForm(emptyTerminal())}
+                className="flex items-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-500 px-4 py-2.5 text-sm font-semibold text-white transition-colors whitespace-nowrap"
+              >
+                <Plus className="w-4 h-4" /> Add Tablet
+              </button>
+            </div>
+
+            {/* Token info */}
+            {kioskToken && (
+              <div className="mt-5 mb-6 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
+                <p className="text-xs font-semibold text-amber-400 mb-1 uppercase tracking-wide">Kiosk Security Token</p>
+                <p className="text-xs text-zinc-500 mb-2">This token is embedded in every kiosk URL below. Keep it private — only share the full URL with the tablet.</p>
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-xs text-zinc-400 truncate flex-1">{kioskToken}</span>
+                </div>
+              </div>
+            )}
+
+            {/* No LAN warning */}
+            {!lanUrl && (
+              <div className="mb-4 rounded-xl border border-zinc-700 bg-zinc-800/40 p-4 text-sm text-zinc-400">
+                LAN server is not running. Start the app to enable network access.
+              </div>
+            )}
+
+            {/* Terminal list */}
+            {terminals.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-zinc-700 p-10 text-center text-zinc-500 mt-4">
+                <Tablet className="w-8 h-8 mx-auto mb-3 opacity-40" />
+                <p className="text-sm font-medium">No kiosk tablets defined yet.</p>
+                <p className="text-xs text-zinc-600 mt-1">Click "Add Tablet" to create the first one.</p>
+              </div>
+            ) : (
+              <div className="space-y-3 mt-4">
+                {terminals.map(term => {
+                  const url = kioskUrl(term)
+                  const copied = termCopied === term.id
+                  return (
+                    <div key={term.id} className={cn(
+                      'rounded-xl border p-4',
+                      term.isEnabled ? 'border-zinc-700 bg-zinc-800/40' : 'border-zinc-800 bg-zinc-900/40 opacity-60'
+                    )}>
+                      <div className="flex items-start gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-primary-600/15 border border-primary-500/20 flex items-center justify-center flex-shrink-0">
+                          <span className="text-sm font-bold text-primary-400">{term.number}</span>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-semibold text-zinc-100 text-sm">{term.label}</span>
+                            {term.location && (
+                              <span className="text-xs text-zinc-500 bg-zinc-800 border border-zinc-700 rounded-full px-2 py-0.5">{term.location}</span>
+                            )}
+                            {!term.isEnabled && (
+                              <span className="text-xs text-zinc-600 bg-zinc-800 border border-zinc-700 rounded-full px-2 py-0.5">Disabled</span>
+                            )}
+                          </div>
+                          {url ? (
+                            <div className="mt-2 flex items-center gap-2">
+                              <span className="font-mono text-xs text-zinc-500 truncate flex-1 bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5">{url}</span>
+                              <button
+                                onClick={() => copyKioskUrl(term)}
+                                className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 hover:bg-zinc-700 px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors whitespace-nowrap"
+                              >
+                                {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                                {copied ? 'Copied!' : 'Copy URL'}
+                              </button>
+                            </div>
+                          ) : (
+                            <p className="text-xs text-zinc-600 mt-1">Start the app to generate URL</p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <button onClick={() => setTermForm({ ...term })}
+                            className="p-1.5 rounded-lg hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors">
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button onClick={() => deleteTerm(term.id)}
+                            className="p-1.5 rounded-lg hover:bg-zinc-700 text-zinc-400 hover:text-red-400 transition-colors">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            {/* Usage instructions */}
+            <div className="mt-8 rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
+              <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-3">How to set up a tablet</p>
+              <ol className="space-y-2 text-sm text-zinc-500 list-decimal list-inside">
+                <li>Add a tablet entry above and copy its URL.</li>
+                <li>Connect the tablet to the same WiFi network as the server.</li>
+                <li>Open the URL in the tablet&apos;s browser (Chrome or Firefox recommended).</li>
+                <li>Use the browser&apos;s &quot;Add to Home Screen&quot; option for a full-screen kiosk feel.</li>
+                <li>For a true locked kiosk, enable the browser&apos;s Kiosk / Guided Access mode.</li>
+              </ol>
+            </div>
+          </div>
+        )}
+
+        {/* ── Terminal form modal ─────────────────────────────────────────────── */}
+        {termForm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <div className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-full max-w-md shadow-2xl">
+              <div className="flex items-center justify-between mb-5">
+                <h2 className="text-base font-bold text-zinc-100">{terminals.some(t => t.id === termForm.id) ? 'Edit Tablet' : 'New Kiosk Tablet'}</h2>
+                <button onClick={() => setTermForm(null)} className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-400"><X className="w-4 h-4" /></button>
+              </div>
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">Number</label>
+                    <input type="number" min={1} value={termForm.number}
+                      onChange={e => setTermForm({ ...termForm, number: parseInt(e.target.value) || 1 })}
+                      className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-primary-500" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-zinc-400 mb-1.5">Label</label>
+                    <input value={termForm.label}
+                      onChange={e => setTermForm({ ...termForm, label: e.target.value })}
+                      placeholder="e.g. Kiosk 1"
+                      className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-primary-500" />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-zinc-400 mb-1.5">Location <span className="text-zinc-600 font-normal">(optional)</span></label>
+                  <input value={termForm.location ?? ''}
+                    onChange={e => setTermForm({ ...termForm, location: e.target.value || null })}
+                    placeholder="e.g. Main Entrance, Reception, Ward 3"
+                    className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-primary-500" />
+                </div>
+                <div className="flex items-center gap-3">
+                  <button onClick={() => setTermForm({ ...termForm, isEnabled: !termForm.isEnabled })}
+                    className={cn('flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors',
+                      termForm.isEnabled ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400' : 'border-zinc-700 bg-zinc-800/50 text-zinc-500')}>
+                    {termForm.isEnabled ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
+                    {termForm.isEnabled ? 'Enabled' : 'Disabled'}
+                  </button>
+                </div>
+              </div>
+              <div className="flex justify-end gap-2 mt-6">
+                <button onClick={() => setTermForm(null)}
+                  className="px-4 py-2 rounded-lg border border-zinc-700 bg-zinc-800/50 text-sm font-medium text-zinc-400 hover:text-zinc-200 transition-colors">
+                  Cancel
+                </button>
+                <button onClick={saveTerm} disabled={!termForm.label.trim()}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary-600 hover:bg-primary-500 disabled:opacity-50 text-sm font-semibold text-white transition-colors">
+                  <Save className="w-3.5 h-3.5" /> Save
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
     </div>

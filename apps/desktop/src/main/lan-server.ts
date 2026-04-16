@@ -97,6 +97,8 @@ export class LanServer {
 
   // ── Security ─────────────────────────────────────────────────────────────
   private apiToken: string = ''
+  /** Separate token for kiosk tablets — lower privilege than operator token */
+  private kioskToken: string = ''
   /** ip → { failures, windowStart } */
   private rateLimiter = new Map<string, { failures: number; windowStart: number }>()
   private readonly RATE_MAX = 10
@@ -115,6 +117,7 @@ export class LanServer {
   }
 
   getToken(): string { return this.apiToken }
+  getKioskToken(): string { return this.kioskToken }
   getPort(): number { return this.actualPort ?? this.port }
 
   // ── Token persistence ────────────────────────────────────────────────────
@@ -131,6 +134,19 @@ export class LanServer {
       console.log('[LAN] New API token generated and saved.')
     }
     console.log(`[LAN] API token: ${this.apiToken.slice(0, 8)}…${this.apiToken.slice(-4)}`)
+  }
+
+  private initKioskToken(): void {
+    const config = readLocalConfig() as any
+    const stored = config.kioskToken
+    if (stored && typeof stored === 'string' && stored.length >= 32 && /^[0-9a-f]+$/i.test(stored)) {
+      this.kioskToken = stored
+    } else {
+      this.kioskToken = Array.from({ length: 5 }, () => randomUUID().replace(/-/g, '')).join('').slice(0, 40)
+      writeLocalConfig({ kioskToken: this.kioskToken } as any)
+      console.log('[LAN] New kiosk token generated and saved.')
+    }
+    console.log(`[LAN] Kiosk token: ${this.kioskToken.slice(0, 8)}…${this.kioskToken.slice(-4)}`)
   }
 
   // ── Rate limiter helpers ─────────────────────────────────────────────────
@@ -170,6 +186,15 @@ export class LanServer {
     return auth === `Bearer ${this.apiToken}`
   }
 
+  private checkKioskAuth(req: http.IncomingMessage): boolean {
+    const auth = req.headers['authorization'] ?? ''
+    return auth === `Bearer ${this.kioskToken}`
+  }
+
+  private validKioskToken(t: string | null): boolean {
+    return !!t && t === this.kioskToken
+  }
+
   // ── CORS origin validation ───────────────────────────────────────────────
   private isLocalOrigin(origin: string | undefined): boolean {
     if (!origin) return true  // no Origin header = same-origin or curl — allow
@@ -185,6 +210,7 @@ export class LanServer {
 
   start(): Promise<void> {
     this.initToken()
+    this.initKioskToken()
     return new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => this.handle(req, res))
 
@@ -530,6 +556,105 @@ export class LanServer {
       return
     }
 
+    // ── GET /kiosk — serve the tablet kiosk page ─────────────────────────────
+    if (method === 'GET' && path === '/kiosk') {
+      const t = url.searchParams.get('token')
+      if (!this.validKioskToken(t)) {
+        this.recordFailure(ip)
+        res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' })
+        res.end('<html><body style="font-family:sans-serif;text-align:center;padding:4rem;background:#0a0a0f;color:#ef4444"><h2>Access Denied</h2><p>Invalid or missing kiosk token.</p></body></html>')
+        return
+      }
+      this.clearFailures(ip)
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      res.end(this.buildKioskPage())
+      return
+    }
+
+    // ── GET /api/kiosk/config — categories + kiosk questions + feedback qs ───
+    if (method === 'GET' && path === '/api/kiosk/config') {
+      const t = url.searchParams.get('token')
+      if (!this.validKioskToken(t)) {
+        this.recordFailure(ip)
+        reply(401, { error: 'Unauthorized' })
+        return
+      }
+      this.clearFailures(ip)
+      try {
+        const db = this.getDb()
+        const categories = db.prepare('SELECT * FROM categories ORDER BY code ASC').all()
+        const kioskQuestions = db.prepare(`
+          SELECT * FROM kiosk_questions WHERE is_enabled = 1
+          ORDER BY order_index ASC, created_at ASC
+        `).all()
+        const feedbackQuestions = db.prepare(`
+          SELECT * FROM feedback_questions WHERE is_enabled = 1
+          ORDER BY order_index ASC, created_at ASC
+        `).all()
+        const orgName = (() => {
+          try { return (readLocalConfig() as any).installationConfig?.organizationName ?? '' } catch { return '' }
+        })()
+        reply(200, { categories, kioskQuestions, feedbackQuestions, orgName })
+      } catch (e) { reply(500, { error: String(e) }) }
+      return
+    }
+
+    // ── POST /api/kiosk/issue — issue a ticket from a tablet ─────────────────
+    if (method === 'POST' && path === '/api/kiosk/issue') {
+      if (!this.checkKioskAuth(req)) {
+        this.recordFailure(ip)
+        reply(401, { error: 'Unauthorized' })
+        return
+      }
+      this.clearFailures(ip)
+      const body = await readBody(req) as { categoryId: string; kioskId?: string; answers?: unknown[] }
+      if (!body.categoryId) { reply(400, { error: 'categoryId required' }); return }
+      try {
+        const db  = this.getDb()
+        const cat = db.prepare('SELECT * FROM categories WHERE id=?').get(body.categoryId) as any
+        if (!cat) { reply(404, { error: 'Category not found' }); return }
+        const today  = new Date().toISOString().slice(0, 10)
+        const maxRow = db.prepare(
+          `SELECT MAX(sequence_number) as m FROM tickets WHERE category_id=? AND created_at LIKE ?`
+        ).get(body.categoryId, `${today}%`) as { m: number | null }
+        const seq           = (maxRow.m ?? 0) + 1
+        const pad           = (n: number) => String(n).padStart(3, '0')
+        const displayNumber = `${cat.prefix ?? ''}${pad(seq)}`
+        const id            = randomUUID()
+        const now           = new Date().toISOString()
+        db.prepare(`
+          INSERT INTO tickets (id,display_number,sequence_number,category_id,status,created_at,recall_count,answers)
+          VALUES (?,?,?,?,'waiting',?,0,?)
+        `).run(id, displayNumber, seq, body.categoryId, now, JSON.stringify(body.answers ?? []))
+        this.broadcastSSE('queue', this.getQueue())
+        this.broadcastSSE('stats', this.getStats())
+        reply(200, { success: true, ticket: { id, displayNumber, sequenceNumber: seq, categoryId: body.categoryId, categoryLabel: cat.label, categoryColor: cat.color } })
+      } catch (e) { reply(500, { error: String(e) }) }
+      return
+    }
+
+    // ── POST /api/kiosk/feedback — submit feedback from a tablet ─────────────
+    if (method === 'POST' && path === '/api/kiosk/feedback') {
+      if (!this.checkKioskAuth(req)) {
+        this.recordFailure(ip)
+        reply(401, { error: 'Unauthorized' })
+        return
+      }
+      this.clearFailures(ip)
+      const body = await readBody(req) as { ticketId?: string; kioskId?: string; categoryId?: string; categoryLabel?: string; answers?: unknown[] }
+      try {
+        const db  = this.getDb()
+        const id  = randomUUID()
+        const now = new Date().toISOString()
+        db.prepare(`
+          INSERT INTO feedback_responses (id, submitted_at, category_id, category_label, answers)
+          VALUES (?, ?, ?, ?, ?)
+        `).run(id, now, body.categoryId ?? null, body.categoryLabel ?? null, JSON.stringify(body.answers ?? []))
+        reply(200, { success: true, id })
+      } catch (e) { reply(500, { error: String(e) }) }
+      return
+    }
+
     reply(404, { error: 'Not found' })
   }
 
@@ -558,6 +683,656 @@ export class LanServer {
     } catch {
       return 'en'
     }
+  }
+
+  private buildKioskPage(): string {
+    // NOTE: all JS strings inside this template literal must use "double quotes"
+    // Single-quote escapes (\'  ) are consumed by the template literal engine,
+    // which would break the browser-side JS parser.
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Self Service Kiosk</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;background:#0a0a0f;color:#f4f4f5;font-family:system-ui,-apple-system,sans-serif;touch-action:manipulation;user-select:none}
+.screen{display:none;height:100vh;overflow:hidden}
+.screen.active{display:flex;flex-direction:column}
+
+/* ── Header ── */
+.hdr{display:flex;align-items:center;justify-content:space-between;padding:20px 28px 16px;border-bottom:1px solid #27272a}
+.hdr-org{font-size:clamp(14px,2.5vw,18px);font-weight:700;color:#f4f4f5;letter-spacing:.01em}
+.hdr-sub{font-size:12px;color:#71717a;margin-top:2px}
+.hdr-tag{display:flex;align-items:center;gap:6px;font-size:12px;color:#52525b;background:#18181b;border:1px solid #27272a;border-radius:20px;padding:4px 12px}
+.hdr-dot{width:7px;height:7px;border-radius:50%;background:#22c55e}
+
+/* ── Category grid ── */
+.cats-body{flex:1;overflow-y:auto;padding:28px}
+.cats-title{font-size:clamp(20px,4vw,32px);font-weight:800;color:#f4f4f5;text-align:center;margin-bottom:6px}
+.cats-hint{font-size:clamp(13px,2vw,16px);color:#71717a;text-align:center;margin-bottom:28px}
+.cats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;max-width:900px;margin:0 auto}
+.cat-btn{position:relative;border:2px solid #27272a;border-radius:20px;background:#18181b;padding:28px 20px;text-align:left;cursor:pointer;transition:transform .12s,border-color .12s,background .12s;display:flex;flex-direction:column;gap:10px;min-height:140px}
+.cat-btn:active{transform:scale(.97)}
+.cat-code{display:inline-flex;align-items:center;justify-content:center;width:48px;height:48px;border-radius:14px;font-size:18px;font-weight:800;letter-spacing:.03em}
+.cat-label{font-size:clamp(15px,2.5vw,18px);font-weight:700;color:#f4f4f5;line-height:1.25}
+.cat-wait{font-size:12px;color:#71717a;margin-top:auto}
+.cat-arrow{position:absolute;top:16px;right:18px;font-size:20px;color:#3f3f46}
+
+/* ── Questions ── */
+.qs-body{flex:1;overflow-y:auto;padding:28px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px}
+.qs-prog{display:flex;gap:6px;justify-content:center}
+.qs-prog-dot{width:8px;height:8px;border-radius:50%;background:#27272a;transition:background .2s}
+.qs-prog-dot.done{background:#4f46e5}
+.qs-prog-dot.active{background:#6366f1;width:24px;border-radius:4px}
+.qs-text{font-size:clamp(18px,3.5vw,28px);font-weight:700;color:#f4f4f5;text-align:center;max-width:700px;line-height:1.35}
+.qs-opts{display:flex;flex-direction:column;gap:12px;width:100%;max-width:600px}
+.qs-opt{border:2px solid #27272a;border-radius:16px;background:#18181b;padding:18px 24px;font-size:clamp(15px,2.5vw,19px);font-weight:600;color:#d4d4d8;cursor:pointer;text-align:left;transition:border-color .12s,background .12s,color .12s}
+.qs-opt:active{transform:scale(.98)}
+.qs-opt.sel{border-color:#4f46e5;background:#4f46e5/10;color:#818cf8}
+.qs-text-inp{width:100%;max-width:600px;border:2px solid #27272a;border-radius:16px;background:#18181b;padding:18px 22px;font-size:18px;color:#f4f4f5;outline:none;transition:border-color .2s}
+.qs-text-inp:focus{border-color:#4f46e5}
+.qs-nav{display:flex;gap:12px;width:100%;max-width:600px}
+.btn{border:none;border-radius:14px;padding:16px 28px;font-size:16px;font-weight:700;cursor:pointer;transition:opacity .12s,transform .1s}
+.btn:active{transform:scale(.97)}
+.btn-pri{background:linear-gradient(135deg,#4f46e5,#6366f1);color:#fff;flex:1}
+.btn-sec{background:#18181b;border:2px solid #27272a;color:#a1a1aa}
+.btn:disabled{opacity:.4;pointer-events:none}
+
+/* ── Issuing ── */
+.issuing-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px}
+.spinner{width:56px;height:56px;border:4px solid #27272a;border-top-color:#6366f1;border-radius:50%;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.issuing-txt{font-size:20px;font-weight:600;color:#a1a1aa}
+
+/* ── Ticket ── */
+.ticket-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px}
+.ticket-card{border:2px solid #27272a;border-radius:28px;background:#18181b;padding:40px 60px;text-align:center;position:relative;overflow:hidden;width:100%;max-width:480px}
+.ticket-card::before{content:"";position:absolute;inset:0;background:radial-gradient(ellipse at 50% 0%,#4f46e520 0%,transparent 60%);pointer-events:none}
+.ticket-org{font-size:13px;color:#71717a;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px}
+.ticket-cat{font-size:18px;font-weight:700;margin-bottom:20px}
+.ticket-label{font-size:14px;color:#71717a;letter-spacing:.05em;text-transform:uppercase;margin-bottom:6px}
+.ticket-num{font-size:clamp(64px,14vw,100px);font-weight:900;line-height:1;letter-spacing:-.02em;background:linear-gradient(135deg,#818cf8,#c084fc);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:12px}
+.ticket-hint{font-size:14px;color:#52525b;margin-top:8px}
+.ticket-bar{width:100%;max-width:480px;height:4px;background:#27272a;border-radius:2px;overflow:hidden;margin-top:4px}
+.ticket-bar-fill{height:100%;background:linear-gradient(90deg,#4f46e5,#6366f1);border-radius:2px;transition:width .5s linear}
+.ticket-actions{display:flex;gap:12px;width:100%;max-width:480px;margin-top:8px}
+
+/* ── Feedback ── */
+.fb-body{flex:1;overflow-y:auto;padding:28px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px}
+.fb-step{font-size:13px;color:#71717a;letter-spacing:.04em;text-transform:uppercase}
+.fb-q{font-size:clamp(17px,3vw,26px);font-weight:700;color:#f4f4f5;text-align:center;max-width:620px;line-height:1.35}
+.stars{display:flex;gap:12px;justify-content:center;margin:4px 0}
+.star-btn{font-size:44px;cursor:pointer;transition:transform .1s,filter .1s;filter:grayscale(1) opacity(.5)}
+.star-btn.sel{filter:none;transform:scale(1.15)}
+.star-btn:active{transform:scale(1.05)}
+.emojis{display:flex;gap:16px;justify-content:center;flex-wrap:wrap}
+.emoji-btn{display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer;padding:12px;border-radius:16px;border:2px solid #27272a;background:#18181b;transition:border-color .12s,background .12s;min-width:70px}
+.emoji-btn .em{font-size:36px}
+.emoji-btn .el{font-size:12px;color:#71717a}
+.emoji-btn.sel{border-color:#4f46e5;background:#4f46e5/10}
+.emoji-btn:active{transform:scale(.97)}
+.fb-opts{display:flex;flex-direction:column;gap:10px;width:100%;max-width:560px}
+.fb-opt{border:2px solid #27272a;border-radius:14px;background:#18181b;padding:16px 20px;font-size:16px;font-weight:600;color:#d4d4d8;cursor:pointer;text-align:left;transition:border-color .12s,background .12s,color .12s}
+.fb-opt.sel{border-color:#4f46e5;background:#4f46e5/10;color:#818cf8}
+.fb-opt:active{transform:scale(.98)}
+.fb-text-inp{width:100%;max-width:560px;border:2px solid #27272a;border-radius:14px;background:#18181b;padding:16px 18px;font-size:16px;color:#f4f4f5;outline:none;resize:none;height:100px;transition:border-color .2s}
+.fb-text-inp:focus{border-color:#4f46e5}
+.fb-nav{display:flex;gap:12px;width:100%;max-width:560px}
+
+/* ── Thanks ── */
+.thanks-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px;text-align:center}
+.thanks-icon{font-size:72px;animation:popIn .4s cubic-bezier(.34,1.56,.64,1) both}
+@keyframes popIn{from{transform:scale(0) rotate(-10deg);opacity:0}to{transform:scale(1) rotate(0);opacity:1}}
+.thanks-title{font-size:clamp(28px,5vw,42px);font-weight:800;color:#f4f4f5}
+.thanks-sub{font-size:clamp(15px,2.5vw,18px);color:#71717a;max-width:500px}
+.thanks-reset{font-size:13px;color:#52525b;margin-top:8px}
+
+/* ── Error ── */
+.err-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;padding:24px}
+.err-icon{font-size:56px}
+.err-title{font-size:24px;font-weight:700;color:#ef4444}
+.err-msg{font-size:15px;color:#71717a;max-width:420px}
+.err-retry{background:#18181b;border:2px solid #27272a;color:#a1a1aa;border-radius:12px;padding:12px 28px;font-size:15px;font-weight:600;cursor:pointer;margin-top:8px}
+</style>
+</head>
+<body>
+
+<!-- Loading -->
+<div id="s-loading" class="screen active">
+  <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px">
+    <div class="spinner"></div>
+    <p style="font-size:16px;color:#71717a">Loading…</p>
+  </div>
+</div>
+
+<!-- Error -->
+<div id="s-err" class="screen">
+  <div class="err-body">
+    <div class="err-icon">⚠️</div>
+    <div class="err-title">Connection Error</div>
+    <div class="err-msg" id="err-msg">Could not connect to the server.</div>
+    <button class="err-retry" onclick="init()">Retry</button>
+  </div>
+</div>
+
+<!-- Categories -->
+<div id="s-cats" class="screen">
+  <div class="hdr">
+    <div>
+      <div class="hdr-org" id="hdr-org">Queue System</div>
+      <div class="hdr-sub">Self Service</div>
+    </div>
+    <div class="hdr-tag"><div class="hdr-dot"></div><span id="hdr-kid"></span></div>
+  </div>
+  <div class="cats-body">
+    <div class="cats-title">Welcome!</div>
+    <div class="cats-hint">Select the service you need</div>
+    <div class="cats-grid" id="cats-grid"></div>
+  </div>
+</div>
+
+<!-- Questions -->
+<div id="s-qs" class="screen">
+  <div class="hdr">
+    <div>
+      <div class="hdr-org" id="qs-hdr-org">Queue System</div>
+      <div class="hdr-sub" id="qs-hdr-cat"></div>
+    </div>
+    <div class="hdr-tag"><div class="hdr-dot"></div><span id="qs-hdr-kid"></span></div>
+  </div>
+  <div class="qs-body">
+    <div class="qs-prog" id="qs-prog"></div>
+    <div class="qs-text" id="qs-text"></div>
+    <div id="qs-input-area"></div>
+    <div class="qs-nav">
+      <button class="btn btn-sec" id="qs-back" onclick="qsBack()">Back</button>
+      <button class="btn btn-pri" id="qs-next" onclick="qsNext()" disabled>Next</button>
+    </div>
+  </div>
+</div>
+
+<!-- Issuing -->
+<div id="s-issuing" class="screen">
+  <div class="issuing-body">
+    <div class="spinner"></div>
+    <div class="issuing-txt">Issuing your ticket…</div>
+  </div>
+</div>
+
+<!-- Ticket -->
+<div id="s-ticket" class="screen">
+  <div class="hdr">
+    <div>
+      <div class="hdr-org" id="tk-hdr-org">Queue System</div>
+      <div class="hdr-sub">Your ticket</div>
+    </div>
+    <div class="hdr-tag"><div class="hdr-dot"></div><span id="tk-hdr-kid"></span></div>
+  </div>
+  <div class="ticket-body">
+    <div class="ticket-card">
+      <div class="ticket-org" id="tk-org"></div>
+      <div class="ticket-cat" id="tk-cat-label"></div>
+      <div class="ticket-label">Your number</div>
+      <div class="ticket-num" id="tk-num"></div>
+      <div class="ticket-hint">Please wait until your number is called</div>
+    </div>
+    <div class="ticket-bar"><div class="ticket-bar-fill" id="tk-bar" style="width:100%"></div></div>
+    <div class="ticket-actions">
+      <button class="btn btn-sec" onclick="resetKiosk()" style="flex:1">Done</button>
+      <button class="btn btn-pri" id="tk-feedback-btn" onclick="startFeedback()" style="flex:1">Give Feedback</button>
+    </div>
+  </div>
+</div>
+
+<!-- Feedback -->
+<div id="s-fb" class="screen">
+  <div class="hdr">
+    <div>
+      <div class="hdr-org" id="fb-hdr-org">Queue System</div>
+      <div class="hdr-sub">Feedback</div>
+    </div>
+    <div class="hdr-tag"><div class="hdr-dot"></div><span id="fb-hdr-kid"></span></div>
+  </div>
+  <div class="fb-body">
+    <div class="fb-step" id="fb-step"></div>
+    <div class="fb-q" id="fb-q"></div>
+    <div id="fb-input-area"></div>
+    <div class="fb-nav">
+      <button class="btn btn-sec" id="fb-skip" onclick="fbSkip()">Skip</button>
+      <button class="btn btn-pri" id="fb-next" onclick="fbNext()" disabled>Next</button>
+    </div>
+  </div>
+</div>
+
+<!-- Thanks -->
+<div id="s-thanks" class="screen">
+  <div class="thanks-body">
+    <div class="thanks-icon">🎉</div>
+    <div class="thanks-title">Thank You!</div>
+    <div class="thanks-sub">Your feedback helps us serve you better.</div>
+    <div class="thanks-reset" id="thanks-reset-txt"></div>
+  </div>
+</div>
+
+<script>
+// ── Bootstrap ────────────────────────────────────────────────────────────────
+var params = new URLSearchParams(location.search)
+var TOKEN = params.get("token") || ""
+var KIOSK_ID = params.get("kid") || ""
+var KIOSK_LABEL = params.get("label") ? decodeURIComponent(params.get("label")) : (KIOSK_ID ? "Kiosk " + KIOSK_ID : "Kiosk")
+
+// ── State ────────────────────────────────────────────────────────────────────
+var categories = [], kioskQuestions = [], feedbackQuestions = [], orgName = ""
+var selCat = null
+var visibleQs = [], qIdx = 0, qAnswers = []
+var visibleFbQs = [], fbIdx = 0, fbAnswers = []
+var issuedTicket = null
+var resetTimer = null
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;") }
+function show(id) {
+  document.querySelectorAll(".screen").forEach(function(el) { el.classList.remove("active") })
+  document.getElementById(id).classList.add("active")
+}
+function post(path, body) {
+  return fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + TOKEN },
+    body: JSON.stringify(body)
+  }).then(function(r) { return r.json() })
+}
+function setKidLabels() {
+  ["hdr-kid","qs-hdr-kid","tk-hdr-kid","fb-hdr-kid"].forEach(function(id) {
+    var el = document.getElementById(id)
+    if (el) el.textContent = KIOSK_LABEL
+  })
+  ["hdr-org","qs-hdr-org","tk-hdr-org","fb-hdr-org"].forEach(function(id) {
+    var el = document.getElementById(id)
+    if (el) el.textContent = orgName || "Queue System"
+  })
+}
+function clearResetTimer() { if (resetTimer) { clearTimeout(resetTimer); resetTimer = null } }
+function scheduleReset(ms) {
+  clearResetTimer()
+  resetTimer = setTimeout(function() { resetKiosk() }, ms)
+}
+
+// ── Init / Load ──────────────────────────────────────────────────────────────
+function init() {
+  show("s-loading")
+  fetch("/api/kiosk/config?token=" + encodeURIComponent(TOKEN))
+    .then(function(r) { return r.json() })
+    .then(function(cfg) {
+      categories        = cfg.categories || []
+      kioskQuestions    = cfg.kioskQuestions || []
+      feedbackQuestions = cfg.feedbackQuestions || []
+      orgName           = cfg.orgName || ""
+      setKidLabels()
+      buildCategoryGrid()
+      show("s-cats")
+    })
+    .catch(function(e) {
+      document.getElementById("err-msg").textContent = "Could not connect to server. (" + e.message + ")"
+      show("s-err")
+    })
+}
+
+// ── Category screen ──────────────────────────────────────────────────────────
+function buildCategoryGrid() {
+  var grid = document.getElementById("cats-grid")
+  grid.innerHTML = ""
+  if (categories.length === 0) {
+    grid.innerHTML = "<p style='color:#52525b;text-align:center;padding:40px;grid-column:1/-1'>No services configured. Please contact staff.</p>"
+    return
+  }
+  categories.forEach(function(cat) {
+    var btn = document.createElement("button")
+    btn.className = "cat-btn"
+    btn.innerHTML =
+      "<div class=\\"cat-code\\" style=\\"background:" + esc(cat.color) + "20;color:" + esc(cat.color) + "\\">" + esc(cat.code) + "</div>" +
+      "<div class=\\"cat-label\\">" + esc(cat.label) + "</div>" +
+      "<div class=\\"cat-wait\\">Tap to get ticket</div>" +
+      "<div class=\\"cat-arrow\\">&#8250;</div>"
+    btn.style.setProperty("--c", cat.color)
+    btn.addEventListener("click", function() { selectCategory(cat) })
+    grid.appendChild(btn)
+  })
+}
+
+function selectCategory(cat) {
+  selCat = cat
+  qAnswers = []
+  visibleQs = computeVisibleQs([])
+  qIdx = 0
+  if (visibleQs.length === 0) {
+    issueTicket()
+    return
+  }
+  renderQuestion()
+  show("s-qs")
+  var orgEl = document.getElementById("qs-hdr-org")
+  if (orgEl) orgEl.textContent = orgName || "Queue System"
+  var catEl = document.getElementById("qs-hdr-cat")
+  if (catEl) catEl.textContent = cat.label
+}
+
+// ── Kiosk questions ──────────────────────────────────────────────────────────
+function computeVisibleQs(answers) {
+  // Filter questions: global (null categoryId) + category-specific, with branching
+  return kioskQuestions.filter(function(q) {
+    if (q.category_id !== null && q.category_id !== selCat.id) return false
+    if (!q.depends_on_question_id) return true
+    var dep = answers.find(function(a) { return a.questionId === q.depends_on_question_id })
+    if (!dep) return false
+    if (!q.depends_on_option_id) return true
+    return dep.optionId === q.depends_on_option_id
+  })
+}
+
+function renderQuestion() {
+  var visVis = computeVisibleQs(qAnswers)
+  visibleQs = visVis
+  var prog = document.getElementById("qs-prog")
+  prog.innerHTML = visibleQs.map(function(q, i) {
+    var cls = i < qIdx ? "done" : i === qIdx ? "active" : ""
+    return "<div class=\\"qs-prog-dot " + cls + "\\"></div>"
+  }).join("")
+  var q = visibleQs[qIdx]
+  if (!q) { issueTicket(); return }
+  document.getElementById("qs-text").textContent = q.question
+  var area = document.getElementById("qs-input-area")
+  area.innerHTML = ""
+  var nextBtn = document.getElementById("qs-next")
+  var backBtn = document.getElementById("qs-back")
+  backBtn.style.display = qIdx === 0 ? "none" : ""
+  nextBtn.disabled = true
+  var opts = JSON.parse(q.options || "[]")
+  if (q.type === "single") {
+    var div = document.createElement("div")
+    div.className = "qs-opts"
+    opts.forEach(function(opt) {
+      var btn = document.createElement("button")
+      btn.className = "qs-opt"
+      btn.textContent = opt.label || opt
+      btn.onclick = function() {
+        div.querySelectorAll(".qs-opt").forEach(function(b) { b.classList.remove("sel") })
+        btn.classList.add("sel")
+        btn._optId  = opt.id || opt.label || opt
+        btn._optLabel = opt.label || opt
+        btn._routesTo = opt.routesToWindowId || null
+        nextBtn.disabled = false
+        nextBtn._selectedBtn = btn
+      }
+      div.appendChild(btn)
+    })
+    area.appendChild(div)
+  } else {
+    var inp = document.createElement("input")
+    inp.type = "text"
+    inp.className = "qs-text-inp"
+    inp.placeholder = "Type your answer…"
+    inp.oninput = function() { nextBtn.disabled = inp.value.trim() === "" }
+    area.appendChild(inp)
+  }
+}
+
+function qsBack() {
+  if (qIdx === 0) { show("s-cats"); return }
+  // Remove last answer and go back
+  qAnswers = qAnswers.slice(0, -1)
+  qIdx--
+  renderQuestion()
+}
+
+function qsNext() {
+  var q = visibleQs[qIdx]
+  if (!q) return
+  var nextBtn = document.getElementById("qs-next")
+  var opts = JSON.parse(q.options || "[]")
+  if (q.type === "single") {
+    var btn = nextBtn._selectedBtn
+    if (!btn) return
+    qAnswers.push({ questionId: q.id, question: q.question, optionId: btn._optId, value: btn._optLabel, routesToWindowId: btn._routesTo || undefined })
+  } else {
+    var inp = document.querySelector(".qs-text-inp")
+    if (!inp || inp.value.trim() === "") return
+    qAnswers.push({ questionId: q.id, question: q.question, value: inp.value.trim() })
+  }
+  // Recompute visible questions with updated answers
+  var newVis = computeVisibleQs(qAnswers)
+  visibleQs = newVis
+  if (qIdx + 1 < newVis.length) {
+    qIdx++
+    renderQuestion()
+  } else {
+    issueTicket()
+  }
+}
+
+// ── Issue ticket ─────────────────────────────────────────────────────────────
+function issueTicket() {
+  show("s-issuing")
+  post("/api/kiosk/issue", {
+    categoryId: selCat.id,
+    kioskId: KIOSK_ID,
+    answers: qAnswers
+  }).then(function(res) {
+    if (!res.ticket) throw new Error(res.error || "Issue failed")
+    issuedTicket = res.ticket
+    showTicket(res.ticket)
+  }).catch(function(e) {
+    document.getElementById("err-msg").textContent = "Failed to issue ticket. (" + e.message + ")"
+    show("s-err")
+  })
+}
+
+// ── Ticket screen ─────────────────────────────────────────────────────────────
+var tkCountdown = null
+function showTicket(ticket) {
+  document.getElementById("tk-org").textContent  = orgName || ""
+  document.getElementById("tk-num").textContent  = ticket.displayNumber
+  var catEl = document.getElementById("tk-cat-label")
+  if (catEl) { catEl.textContent = ticket.categoryLabel || ""; catEl.style.color = ticket.categoryColor || "#818cf8" }
+  // Feedback button: only if there are feedback questions
+  var fbBtn = document.getElementById("tk-feedback-btn")
+  fbBtn.style.display = feedbackQuestions.length > 0 ? "" : "none"
+  show("s-ticket")
+  // Countdown bar: 20 seconds auto-reset
+  var BAR_MS = 20000
+  var bar = document.getElementById("tk-bar")
+  var start = Date.now()
+  if (tkCountdown) clearInterval(tkCountdown)
+  tkCountdown = setInterval(function() {
+    var elapsed = Date.now() - start
+    var pct = Math.max(0, 100 - (elapsed / BAR_MS * 100))
+    bar.style.width = pct + "%"
+    if (elapsed >= BAR_MS) {
+      clearInterval(tkCountdown)
+      if (feedbackQuestions.length > 0) startFeedback()
+      else resetKiosk()
+    }
+  }, 100)
+}
+
+// ── Feedback ─────────────────────────────────────────────────────────────────
+var EMOJI_OPTS = [
+  { score: 1, em: "😞", label: "Very Bad" },
+  { score: 2, em: "😕", label: "Bad" },
+  { score: 3, em: "😐", label: "Okay" },
+  { score: 4, em: "😊", label: "Good" },
+  { score: 5, em: "😄", label: "Excellent" }
+]
+
+function computeVisibleFbQs(answers) {
+  return feedbackQuestions.filter(function(q) {
+    if (!q.depends_on_question_id) return true
+    var dep = answers.find(function(a) { return a.questionId === q.depends_on_question_id })
+    if (!dep) return false
+    if (!q.depends_on_answer_value) return true
+    var v = q.depends_on_answer_value
+    var m = v.match(/^(lte|gte|eq):(\d+)$/)
+    if (m && dep.score !== undefined) {
+      var thr = parseInt(m[2])
+      if (m[1] === "lte") return dep.score <= thr
+      if (m[1] === "gte") return dep.score >= thr
+      if (m[1] === "eq")  return dep.score === thr
+    }
+    return dep.value === v
+  })
+}
+
+function startFeedback() {
+  clearInterval(tkCountdown)
+  fbAnswers = []
+  visibleFbQs = computeVisibleFbQs([])
+  fbIdx = 0
+  if (visibleFbQs.length === 0) { submitFeedback(); return }
+  renderFbQuestion()
+  show("s-fb")
+  ["fb-hdr-org","fb-hdr-kid"].forEach(function(id) {
+    var el = document.getElementById(id)
+    if (el) el.textContent = id.includes("org") ? (orgName || "Queue System") : KIOSK_LABEL
+  })
+}
+
+function renderFbQuestion() {
+  visibleFbQs = computeVisibleFbQs(fbAnswers)
+  var q = visibleFbQs[fbIdx]
+  if (!q) { submitFeedback(); return }
+  var total = visibleFbQs.length
+  document.getElementById("fb-step").textContent = "Question " + (fbIdx + 1) + " of " + total
+  document.getElementById("fb-q").textContent    = q.question
+  var nextBtn = document.getElementById("fb-next")
+  var skipBtn = document.getElementById("fb-skip")
+  nextBtn.disabled = true
+  skipBtn.style.display = q.is_required ? "none" : ""
+  var area = document.getElementById("fb-input-area")
+  area.innerHTML = ""
+  var opts = JSON.parse(q.options || "[]")
+  if (q.type === "star") {
+    var wrap = document.createElement("div")
+    wrap.className = "stars"
+    for (var s = 1; s <= 5; s++) {
+      (function(score) {
+        var b = document.createElement("button")
+        b.className = "star-btn"
+        b.textContent = "★"
+        b.dataset.score = score
+        b.onclick = function() {
+          wrap.querySelectorAll(".star-btn").forEach(function(x, i) {
+            x.classList.toggle("sel", i < score)
+          })
+          nextBtn.disabled = false
+          nextBtn._fbVal = { score: score }
+        }
+        wrap.appendChild(b)
+      })(s)
+    }
+    area.appendChild(wrap)
+  } else if (q.type === "emoji") {
+    var ew = document.createElement("div")
+    ew.className = "emojis"
+    EMOJI_OPTS.forEach(function(eo) {
+      var b = document.createElement("button")
+      b.className = "emoji-btn"
+      b.innerHTML = "<span class=\\"em\\">" + eo.em + "</span><span class=\\"el\\">" + esc(eo.label) + "</span>"
+      b.onclick = function() {
+        ew.querySelectorAll(".emoji-btn").forEach(function(x) { x.classList.remove("sel") })
+        b.classList.add("sel")
+        nextBtn.disabled = false
+        nextBtn._fbVal = { score: eo.score, value: eo.label }
+      }
+      ew.appendChild(b)
+    })
+    area.appendChild(ew)
+  } else if (q.type === "choice") {
+    var cd = document.createElement("div")
+    cd.className = "fb-opts"
+    opts.forEach(function(opt) {
+      var b = document.createElement("button")
+      b.className = "fb-opt"
+      b.textContent = opt
+      b.onclick = function() {
+        cd.querySelectorAll(".fb-opt").forEach(function(x) { x.classList.remove("sel") })
+        b.classList.add("sel")
+        nextBtn.disabled = false
+        nextBtn._fbVal = { value: opt }
+      }
+      cd.appendChild(b)
+    })
+    area.appendChild(cd)
+  } else {
+    var ta = document.createElement("textarea")
+    ta.className = "fb-text-inp"
+    ta.placeholder = "Write your thoughts…"
+    ta.oninput = function() { nextBtn.disabled = ta.value.trim() === ""; nextBtn._fbVal = { value: ta.value.trim() } }
+    area.appendChild(ta)
+  }
+}
+
+function fbSkip() {
+  var q = visibleFbQs[fbIdx]
+  if (!q) return
+  fbAnswers.push({ questionId: q.id, question: q.question, type: q.type })
+  var newVis = computeVisibleFbQs(fbAnswers)
+  visibleFbQs = newVis
+  if (fbIdx + 1 < newVis.length) { fbIdx++; renderFbQuestion() }
+  else submitFeedback()
+}
+
+function fbNext() {
+  var q = visibleFbQs[fbIdx]
+  var nextBtn = document.getElementById("fb-next")
+  var val = nextBtn._fbVal || {}
+  fbAnswers.push(Object.assign({ questionId: q.id, question: q.question, type: q.type }, val))
+  nextBtn._fbVal = null
+  var newVis = computeVisibleFbQs(fbAnswers)
+  visibleFbQs = newVis
+  if (fbIdx + 1 < newVis.length) { fbIdx++; renderFbQuestion() }
+  else submitFeedback()
+}
+
+function submitFeedback() {
+  var ticket = issuedTicket || {}
+  post("/api/kiosk/feedback", {
+    ticketId:      ticket.id || null,
+    kioskId:       KIOSK_ID,
+    categoryId:    ticket.categoryId || null,
+    categoryLabel: ticket.categoryLabel || null,
+    answers:       fbAnswers
+  }).then(function() { showThanks() }).catch(function() { showThanks() })
+}
+
+// ── Thanks ───────────────────────────────────────────────────────────────────
+function showThanks() {
+  show("s-thanks")
+  var cd = 5, el = document.getElementById("thanks-reset-txt")
+  el.textContent = "Returning to start in " + cd + " seconds…"
+  var t = setInterval(function() {
+    cd--
+    if (cd <= 0) { clearInterval(t); resetKiosk() }
+    else el.textContent = "Returning to start in " + cd + " seconds…"
+  }, 1000)
+}
+
+// ── Reset ────────────────────────────────────────────────────────────────────
+function resetKiosk() {
+  clearResetTimer()
+  if (tkCountdown) { clearInterval(tkCountdown); tkCountdown = null }
+  selCat = null; qAnswers = []; fbAnswers = []
+  issuedTicket = null; qIdx = 0; fbIdx = 0
+  buildCategoryGrid()
+  show("s-cats")
+}
+
+// ── Start ────────────────────────────────────────────────────────────────────
+init()
+</script>
+</body>
+</html>`
   }
 
   private buildPanel(): string {

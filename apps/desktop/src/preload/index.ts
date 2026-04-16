@@ -126,8 +126,10 @@ const api = {
   lan: {
     /** Returns the LAN URL (e.g. http://192.168.1.5:4000) or null if not started */
     getUrl: (): Promise<string | null> => ipcRenderer.invoke('lan:getUrl'),
-    /** Returns the current LAN API token (40-char hex) */
+    /** Returns the current LAN API token (40-char hex) — for operator panel */
     getToken: (): Promise<string> => ipcRenderer.invoke('lan:getToken'),
+    /** Returns the kiosk token (40-char hex) — for kiosk tablet URLs */
+    getKioskToken: (): Promise<string> => ipcRenderer.invoke('lan:getKioskToken'),
     /** Called when a remote operator triggers an announcement via LAN */
     onAnnounce: (cb: (data: { text: string; displayNumber: string }) => void) => {
       ipcRenderer.on('lan:announce', (_e, data) => cb(data))
@@ -185,6 +187,13 @@ const api = {
     submit: (response: unknown): Promise<{ success: boolean; id: string }> => ipcRenderer.invoke('feedback:submit', response),
     listResponses: (days?: number): Promise<unknown[]> => ipcRenderer.invoke('feedback:responses.list', days),
     summary: (days?: number): Promise<{ total: number; ratings: unknown[]; choices: unknown[] }> => ipcRenderer.invoke('feedback:summary', days),
+  },
+
+  // ─── Kiosk Terminals ───────────────────────────────────────────────────────
+  kioskTerminals: {
+    list: (): Promise<unknown[]> => ipcRenderer.invoke('kiosk:terminals.list'),
+    upsert: (t: unknown): Promise<unknown> => ipcRenderer.invoke('kiosk:terminals.upsert', t),
+    delete: (id: string): Promise<{ success: boolean }> => ipcRenderer.invoke('kiosk:terminals.delete', id),
   },
 
   // ─── Kiosk Idle Config ─────────────────────────────────────────────────
