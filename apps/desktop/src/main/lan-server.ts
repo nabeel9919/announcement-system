@@ -972,10 +972,10 @@ function renderCalled(){
       +'<div class="trow-info"><div class="trow-cat">'+(cat?esc(cat.label):'')+'</div>'
       +'<div class="trow-meta">'+(win?'&#8594; '+esc(win.label):'')+(age?' &middot; '+age:'')+'</div></div>'
       +'<div class="trow-acts">'
-      +'<button class="act act-s" onclick="doServe(\''+t.id+'\')">&#10003;</button>'
-      +'<button class="act act-r" onclick="doRecall(\''+t.id+'\')">&#8635;</button>'
-      +'<button class="act act-n" onclick="doNoShow(\''+t.id+'\')">&#10005;</button>'
-      +'<button class="act act-k" onclick="doSkip(\''+t.id+'\')">&#9197;</button>'
+      +'<button class="act act-s" onclick="doServe(\\''+t.id+'\\')">&#10003;</button>'
+      +'<button class="act act-r" onclick="doRecall(\\''+t.id+'\\')">&#8635;</button>'
+      +'<button class="act act-n" onclick="doNoShow(\\''+t.id+'\\')">&#10005;</button>'
+      +'<button class="act act-k" onclick="doSkip(\\''+t.id+'\\')">&#9197;</button>'
       +'</div></div>'
   }).join('')
 }
