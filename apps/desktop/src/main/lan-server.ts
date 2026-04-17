@@ -733,7 +733,7 @@ html,body{height:100%;overflow:hidden;background:#0a0a0f;color:#f4f4f5;font-fami
 .qs-opts{display:flex;flex-direction:column;gap:12px;width:100%;max-width:600px}
 .qs-opt{border:2px solid #27272a;border-radius:16px;background:#18181b;padding:18px 24px;font-size:clamp(15px,2.5vw,19px);font-weight:600;color:#d4d4d8;cursor:pointer;text-align:left;transition:border-color .12s,background .12s,color .12s}
 .qs-opt:active{transform:scale(.98)}
-.qs-opt.sel{border-color:#4f46e5;background:#4f46e5/10;color:#818cf8}
+.qs-opt.sel{border-color:#4f46e5;background:rgba(79,70,229,0.1);color:#818cf8}
 .qs-text-inp{width:100%;max-width:600px;border:2px solid #27272a;border-radius:16px;background:#18181b;padding:18px 22px;font-size:18px;color:#f4f4f5;outline:none;transition:border-color .2s}
 .qs-text-inp:focus{border-color:#4f46e5}
 .qs-nav{display:flex;gap:12px;width:100%;max-width:600px}
@@ -774,11 +774,11 @@ html,body{height:100%;overflow:hidden;background:#0a0a0f;color:#f4f4f5;font-fami
 .emoji-btn{display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer;padding:12px;border-radius:16px;border:2px solid #27272a;background:#18181b;transition:border-color .12s,background .12s;min-width:70px}
 .emoji-btn .em{font-size:36px}
 .emoji-btn .el{font-size:12px;color:#71717a}
-.emoji-btn.sel{border-color:#4f46e5;background:#4f46e5/10}
+.emoji-btn.sel{border-color:#4f46e5;background:rgba(79,70,229,0.1)}
 .emoji-btn:active{transform:scale(.97)}
 .fb-opts{display:flex;flex-direction:column;gap:10px;width:100%;max-width:560px}
 .fb-opt{border:2px solid #27272a;border-radius:14px;background:#18181b;padding:16px 20px;font-size:16px;font-weight:600;color:#d4d4d8;cursor:pointer;text-align:left;transition:border-color .12s,background .12s,color .12s}
-.fb-opt.sel{border-color:#4f46e5;background:#4f46e5/10;color:#818cf8}
+.fb-opt.sel{border-color:#4f46e5;background:rgba(79,70,229,0.1);color:#818cf8}
 .fb-opt:active{transform:scale(.98)}
 .fb-text-inp{width:100%;max-width:560px;border:2px solid #27272a;border-radius:14px;background:#18181b;padding:16px 18px;font-size:16px;color:#f4f4f5;outline:none;resize:none;height:100px;transition:border-color .2s}
 .fb-text-inp:focus{border-color:#4f46e5}
@@ -948,14 +948,10 @@ function post(path, body) {
   }).then(function(r) { return r.json() })
 }
 function setKidLabels() {
-  ["hdr-kid","qs-hdr-kid","tk-hdr-kid","fb-hdr-kid"].forEach(function(id) {
-    var el = document.getElementById(id)
-    if (el) el.textContent = KIOSK_LABEL
-  })
-  ["hdr-org","qs-hdr-org","tk-hdr-org","fb-hdr-org"].forEach(function(id) {
-    var el = document.getElementById(id)
-    if (el) el.textContent = orgName || "Queue System"
-  })
+  var kidIds = ["hdr-kid","qs-hdr-kid","tk-hdr-kid","fb-hdr-kid"]
+  kidIds.forEach(function(id) { var el = document.getElementById(id); if (el) el.textContent = KIOSK_LABEL })
+  var orgIds = ["hdr-org","qs-hdr-org","tk-hdr-org","fb-hdr-org"]
+  orgIds.forEach(function(id) { var el = document.getElementById(id); if (el) el.textContent = orgName || "Queue System" })
 }
 function clearResetTimer() { if (resetTimer) { clearTimeout(resetTimer); resetTimer = null } }
 function scheduleReset(ms) {
@@ -1209,7 +1205,8 @@ function startFeedback() {
   if (visibleFbQs.length === 0) { submitFeedback(); return }
   renderFbQuestion()
   show("s-fb")
-  ["fb-hdr-org","fb-hdr-kid"].forEach(function(id) {
+  var fbHdrIds = ["fb-hdr-org","fb-hdr-kid"]
+  fbHdrIds.forEach(function(id) {
     var el = document.getElementById(id)
     if (el) el.textContent = id.includes("org") ? (orgName || "Queue System") : KIOSK_LABEL
   })
