@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { InstallationConfig, CallingMode, Sector, SupportedLanguage, UserRole } from '@announcement/shared'
 
-type AppPage = 'setup' | 'login' | 'operator' | 'display' | 'summary' | 'kiosk' | 'settings' | 'analytics' | 'expired'
+type AppPage = 'setup' | 'login' | 'operator' | 'display' | 'summary' | 'kiosk' | 'settings' | 'analytics' | 'feedback-report' | 'expired'
 
 export interface ActiveUser {
   id: string

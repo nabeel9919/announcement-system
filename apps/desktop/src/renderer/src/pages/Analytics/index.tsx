@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useAppStore } from '../../store/app'
 import { useQueueStore } from '../../store/queue'
 import { cn, minutesSince } from '../../lib/utils'
-import { ArrowLeft, TrendingUp, Clock, CheckCircle, Users, BarChart2, RefreshCw, Star, MessageSquare } from 'lucide-react'
+import { ArrowLeft, TrendingUp, Clock, CheckCircle, Users, BarChart2, RefreshCw, Star, MessageSquare, ChevronRight } from 'lucide-react'
 
 interface HourBucket { hour: number; issued: number; served: number }
 interface CatPerf { code: string; label: string; color: string; served: number; skipped: number; waiting: number; avgWaitMin: number }
@@ -223,10 +223,16 @@ export default function AnalyticsPage() {
           <div className="flex items-center gap-2 mb-5">
             <Star className="w-4 h-4 text-amber-400" />
             <h2 className="text-sm font-semibold text-zinc-100">Customer Feedback — Last 30 Days</h2>
-            <span className="ml-auto flex items-center gap-1.5 text-xs text-zinc-500">
+            <span className="flex items-center gap-1.5 text-xs text-zinc-500 ml-4">
               <MessageSquare className="w-3.5 h-3.5" />
               {feedbackTotal} {feedbackTotal === 1 ? 'response' : 'responses'}
             </span>
+            <button
+              onClick={() => setPage('feedback-report')}
+              className="ml-auto flex items-center gap-1 text-xs text-primary-400 hover:text-primary-300 transition-colors font-medium"
+            >
+              Full Report <ChevronRight className="w-3.5 h-3.5" />
+            </button>
           </div>
 
           {feedbackTotal === 0 ? (

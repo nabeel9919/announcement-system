@@ -943,6 +943,132 @@ export function setupIpcHandlers(): void {
 
     return { total, ratings, choices }
   })
+
+  /** Comprehensive feedback report for leadership — aggregates all dimensions */
+  ipcMain.handle('feedback:report', (_event, days = 30) => {
+    const db = getDb()
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+    const rows = db.prepare(`
+      SELECT id, submitted_at, category_id, category_label, answers
+      FROM feedback_responses WHERE submitted_at >= ?
+      ORDER BY submitted_at DESC
+    `).all(since) as any[]
+
+    // Seed daily buckets so every day in range appears even with 0 responses
+    const dailyMap: Record<string, { count: number; scoreSum: number; scoreCount: number }> = {}
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(Date.now() - i * 86_400_000).toISOString().slice(0, 10)
+      dailyMap[d] = { count: 0, scoreSum: 0, scoreCount: 0 }
+    }
+
+    const questionMap: Record<string, {
+      question: string; type: string
+      scoreSum: number; scoreCount: number
+      distribution: Record<string, number>
+      choiceOptions: Record<string, number>
+      textSamples: string[]
+    }> = {}
+
+    const catMap: Record<string, { label: string; count: number; scoreSum: number; scoreCount: number }> = {}
+    const recent: any[] = []
+
+    for (const row of rows) {
+      const date = (row.submitted_at as string).slice(0, 10)
+      if (dailyMap[date]) dailyMap[date].count++
+
+      const catKey = (row.category_id as string | null) ?? '__none__'
+      if (!catMap[catKey]) catMap[catKey] = { label: row.category_label ?? 'General', count: 0, scoreSum: 0, scoreCount: 0 }
+      catMap[catKey].count++
+
+      const answers: any[] = JSON.parse(row.answers ?? '[]')
+
+      for (const a of answers) {
+        const qId = a.questionId as string
+        if (!questionMap[qId]) {
+          questionMap[qId] = { question: a.question ?? qId, type: a.type, scoreSum: 0, scoreCount: 0, distribution: {}, choiceOptions: {}, textSamples: [] }
+        }
+        const q = questionMap[qId]
+        if (a.type === 'star' || a.type === 'emoji') {
+          const score = a.score ?? null
+          if (score) {
+            q.scoreSum += score; q.scoreCount++
+            q.distribution[score] = (q.distribution[score] ?? 0) + 1
+            if (dailyMap[date]) { dailyMap[date].scoreSum += score; dailyMap[date].scoreCount++ }
+            catMap[catKey].scoreSum += score; catMap[catKey].scoreCount++
+          }
+        } else if (a.type === 'choice') {
+          if (a.value) q.choiceOptions[a.value] = (q.choiceOptions[a.value] ?? 0) + 1
+        } else if (a.type === 'text') {
+          if (a.value && q.textSamples.length < 15) q.textSamples.push(a.value as string)
+        }
+      }
+
+      if (recent.length < 25) {
+        recent.push({
+          id: row.id,
+          submittedAt: row.submitted_at,
+          categoryLabel: row.category_label ?? 'General',
+          answers: answers.map((a) => ({
+            question: a.question ?? '',
+            type: a.type,
+            value: a.value ?? null,
+            score: a.score ?? null,
+          })),
+        })
+      }
+    }
+
+    const dailyTrend = Object.entries(dailyMap).map(([date, d]) => ({
+      date,
+      count: d.count,
+      avgScore: d.scoreCount > 0 ? Math.round((d.scoreSum / d.scoreCount) * 10) / 10 : null,
+    }))
+
+    const questions = Object.entries(questionMap).map(([qId, q]) => {
+      const avg = q.scoreCount > 0 ? Math.round((q.scoreSum / q.scoreCount) * 10) / 10 : null
+      const totalChoices = Object.values(q.choiceOptions).reduce((a, b) => a + b, 0)
+      return {
+        questionId: qId,
+        question: q.question,
+        type: q.type,
+        average: avg,
+        count: q.scoreCount || totalChoices || q.textSamples.length,
+        distribution: q.distribution,
+        options: Object.entries(q.choiceOptions)
+          .map(([val, cnt]) => ({ value: val, count: cnt, pct: totalChoices > 0 ? Math.round((cnt / totalChoices) * 100) : 0 }))
+          .sort((a, b) => b.count - a.count),
+        textSamples: q.textSamples,
+      }
+    })
+
+    const byCategory = Object.entries(catMap)
+      .map(([catId, c]) => ({
+        categoryId: catId === '__none__' ? null : catId,
+        categoryLabel: c.label,
+        count: c.count,
+        avgScore: c.scoreCount > 0 ? Math.round((c.scoreSum / c.scoreCount) * 10) / 10 : null,
+      }))
+      .sort((a, b) => b.count - a.count)
+
+    // Overall weighted score across all rating questions
+    let totalScoreSum = 0, totalScoreCount = 0
+    for (const q of questions) {
+      if (q.average !== null && (q.type === 'star' || q.type === 'emoji')) {
+        totalScoreSum += q.average * q.count
+        totalScoreCount += q.count
+      }
+    }
+    const overallScore = totalScoreCount > 0
+      ? Math.round((totalScoreSum / totalScoreCount) * 10) / 10
+      : null
+
+    // Peak day
+    const peakDay = dailyTrend.reduce<{ date: string; count: number } | null>((best, d) => {
+      return !best || d.count > best.count ? { date: d.date, count: d.count } : best
+    }, null)
+
+    return { total: rows.length, overallScore, peakDay, dailyTrend, questions, byCategory, recent }
+  })
 }
 
 /**

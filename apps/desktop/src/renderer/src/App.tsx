@@ -8,6 +8,7 @@ import DaySummaryPage from './pages/DaySummary'
 import KioskPage from './pages/Kiosk'
 import SettingsPage from './pages/Settings'
 import AnalyticsPage from './pages/Analytics'
+import FeedbackReportPage from './pages/FeedbackReport'
 import LicenseExpiredPage from './pages/LicenseExpired'
 
 export default function App() {
@@ -61,5 +62,6 @@ export default function App() {
   if (page === 'summary') return <DaySummaryPage />
   if (page === 'settings') return <SettingsPage />
   if (page === 'analytics') return <AnalyticsPage />
+  if (page === 'feedback-report') return <FeedbackReportPage />
   return <OperatorPage />
 }

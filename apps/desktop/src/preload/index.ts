@@ -187,6 +187,7 @@ const api = {
     submit: (response: unknown): Promise<{ success: boolean; id: string }> => ipcRenderer.invoke('feedback:submit', response),
     listResponses: (days?: number): Promise<unknown[]> => ipcRenderer.invoke('feedback:responses.list', days),
     summary: (days?: number): Promise<{ total: number; ratings: unknown[]; choices: unknown[] }> => ipcRenderer.invoke('feedback:summary', days),
+    report: (days?: number): Promise<unknown> => ipcRenderer.invoke('feedback:report', days),
   },
 
   // ─── Kiosk Terminals ───────────────────────────────────────────────────────
