@@ -6,6 +6,10 @@ import { pathToFileURL } from 'url'
 import { readLocalConfig, writeLocalConfig } from './license'
 import { isPiperAvailable, synthesizeWithPiper, getPiperBin, getPiperModel } from './piper-synth'
 import { listVideos, addVideo, deleteVideo, reorderVideos, getVideosDir } from './video-manager'
+import {
+  getEmailConfig, saveEmailConfig, sendTestEmail,
+  sendDailyReport, sendWeeklyDigest,
+} from './email-reporter'
 import type { UserRole } from '@announcement/shared'
 
 let db: Database.Database | null = null
@@ -1069,6 +1073,90 @@ export function setupIpcHandlers(): void {
 
     return { total: rows.length, overallScore, peakDay, dailyTrend, questions, byCategory, recent }
   })
+
+  // ─── Kiosk Operating Hours ────────────────────────────────────────────────
+
+  const DEFAULT_HOURS_CONFIG = {
+    enabled: false,
+    openTime: '08:00',
+    closeTime: '17:00',
+    days: [1, 2, 3, 4, 5, 6],  // Mon–Sat
+    closedMessage: 'We are currently closed. Please visit us during our operating hours.',
+  }
+
+  ipcMain.handle('kiosk:hoursConfig.get', () => {
+    const config = readLocalConfig() as any
+    return { ...DEFAULT_HOURS_CONFIG, ...(config.kioskHoursConfig ?? {}) }
+  })
+
+  ipcMain.handle('kiosk:hoursConfig.set', (_event, cfg: any) => {
+    writeLocalConfig({ kioskHoursConfig: cfg } as any)
+    return { success: true }
+  })
+
+  // ─── Operator Performance ─────────────────────────────────────────────────
+
+  ipcMain.handle('stats:operatorPerformance', (_event, days = 1) => {
+    const db = getDb()
+    const since = days === 1
+      ? new Date().toISOString().slice(0, 10)  // today only (LIKE query)
+      : new Date(Date.now() - days * 86_400_000).toISOString()
+
+    const rows = days === 1
+      ? db.prepare(`
+          SELECT callee_name, window_id,
+            COUNT(*) as total_called,
+            SUM(CASE WHEN status='served' THEN 1 ELSE 0 END) as served,
+            SUM(CASE WHEN status='skipped' THEN 1 ELSE 0 END) as skipped,
+            SUM(CASE WHEN status='no_show' THEN 1 ELSE 0 END) as no_show,
+            AVG(CASE WHEN served_at IS NOT NULL AND called_at IS NOT NULL
+              THEN (julianday(served_at) - julianday(called_at)) * 86400
+              ELSE NULL END) as avg_service_seconds
+          FROM tickets
+          WHERE callee_name IS NOT NULL AND created_at LIKE ?
+          GROUP BY callee_name, window_id
+          ORDER BY served DESC
+        `).all(`${since}%`) as any[]
+      : db.prepare(`
+          SELECT callee_name, window_id,
+            COUNT(*) as total_called,
+            SUM(CASE WHEN status='served' THEN 1 ELSE 0 END) as served,
+            SUM(CASE WHEN status='skipped' THEN 1 ELSE 0 END) as skipped,
+            SUM(CASE WHEN status='no_show' THEN 1 ELSE 0 END) as no_show,
+            AVG(CASE WHEN served_at IS NOT NULL AND called_at IS NOT NULL
+              THEN (julianday(served_at) - julianday(called_at)) * 86400
+              ELSE NULL END) as avg_service_seconds
+          FROM tickets
+          WHERE callee_name IS NOT NULL AND created_at >= ?
+          GROUP BY callee_name, window_id
+          ORDER BY served DESC
+        `).all(since) as any[]
+
+    return rows.map((r) => ({
+      operatorName: r.callee_name,
+      windowId: r.window_id,
+      totalCalled: r.total_called,
+      served: r.served,
+      skipped: r.skipped,
+      noShow: r.no_show,
+      avgServiceSeconds: r.avg_service_seconds ? Math.round(r.avg_service_seconds) : null,
+    }))
+  })
+
+  // ─── Email Reports ────────────────────────────────────────────────────────
+
+  ipcMain.handle('email:config.get', () => getEmailConfig())
+
+  ipcMain.handle('email:config.set', (_event, cfg: any) => {
+    saveEmailConfig(cfg)
+    return { success: true }
+  })
+
+  ipcMain.handle('email:sendTest', async () => sendTestEmail(getEmailConfig()))
+
+  ipcMain.handle('email:sendDailyNow', async () => sendDailyReport(getDb))
+
+  ipcMain.handle('email:sendWeeklyNow', async () => sendWeeklyDigest(getDb))
 }
 
 /**

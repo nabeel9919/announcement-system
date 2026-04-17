@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react'
 import { useAppStore } from '../../store/app'
 import { useQueueStore } from '../../store/queue'
 import { cn, minutesSince } from '../../lib/utils'
-import { ArrowLeft, TrendingUp, Clock, CheckCircle, Users, BarChart2, RefreshCw, Star, MessageSquare, ChevronRight } from 'lucide-react'
+import { ArrowLeft, TrendingUp, Clock, CheckCircle, Users, BarChart2, RefreshCw, Star, MessageSquare, ChevronRight, UserCheck } from 'lucide-react'
 
 interface HourBucket { hour: number; issued: number; served: number }
 interface CatPerf { code: string; label: string; color: string; served: number; skipped: number; waiting: number; avgWaitMin: number }
 interface FeedbackRating { questionId: string; question: string; average: number; count: number }
+interface OpPerf { operatorName: string; windowId: string; totalCalled: number; served: number; skipped: number; noShow: number; avgServiceSeconds: number | null }
 
 export default function AnalyticsPage() {
   const { setPage } = useAppStore()
@@ -16,6 +17,7 @@ export default function AnalyticsPage() {
   const [catPerf, setCatPerf] = useState<CatPerf[]>([])
   const [feedbackTotal, setFeedbackTotal] = useState(0)
   const [feedbackRatings, setFeedbackRatings] = useState<FeedbackRating[]>([])
+  const [opPerf, setOpPerf] = useState<OpPerf[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshedAt, setRefreshedAt] = useState(new Date())
 
@@ -62,6 +64,8 @@ export default function AnalyticsPage() {
     setCatPerf(cp)
     setFeedbackTotal((fbSummary as any).total ?? 0)
     setFeedbackRatings(((fbSummary as any).ratings ?? []) as FeedbackRating[])
+    const ops = await window.api.stats.operatorPerformance(1).catch(() => [])
+    setOpPerf(ops as OpPerf[])
     setRefreshedAt(new Date())
     setLoading(false)
   }
@@ -217,6 +221,56 @@ export default function AnalyticsPage() {
             </tbody>
           </table>
         </div>
+
+        {/* Operator Performance */}
+        {opPerf.length > 0 && (
+          <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 overflow-hidden">
+            <div className="px-5 py-4 border-b border-zinc-800 flex items-center gap-2">
+              <UserCheck className="w-4 h-4 text-zinc-500" />
+              <h2 className="text-sm font-semibold text-zinc-100">Operator Performance — Today</h2>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-zinc-800">
+                  {['Operator', 'Served', 'Skipped', 'No-show', 'Avg Service', 'Rate'].map((h) => (
+                    <th key={h} className="text-left px-5 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-800">
+                {opPerf.map((op) => {
+                  const rate = op.served + op.skipped > 0 ? Math.round((op.served / (op.served + op.skipped)) * 100) : 0
+                  const avgMin = op.avgServiceSeconds ? Math.round(op.avgServiceSeconds / 60) : null
+                  const avgSec = op.avgServiceSeconds ? op.avgServiceSeconds % 60 : null
+                  return (
+                    <tr key={op.operatorName + op.windowId} className="hover:bg-zinc-800/30 transition-colors">
+                      <td className="px-5 py-3.5">
+                        <p className="text-zinc-100 font-medium text-xs">{op.operatorName}</p>
+                        <p className="text-zinc-600 text-xs">{op.windowId}</p>
+                      </td>
+                      <td className="px-5 py-3.5 text-emerald-400 font-semibold">{op.served}</td>
+                      <td className="px-5 py-3.5 text-zinc-500">{op.skipped}</td>
+                      <td className="px-5 py-3.5 text-zinc-600">{op.noShow}</td>
+                      <td className="px-5 py-3.5 text-zinc-300 text-xs">
+                        {avgMin !== null && avgSec !== null
+                          ? `${avgMin}m ${String(avgSec).padStart(2, '0')}s`
+                          : '—'}
+                      </td>
+                      <td className="px-5 py-3.5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-14 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                            <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${rate}%` }} />
+                          </div>
+                          <span className="text-xs text-zinc-400 w-8">{rate}%</span>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         {/* Feedback / Maoni summary */}
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5">

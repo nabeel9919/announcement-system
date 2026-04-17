@@ -597,7 +597,32 @@ export class LanServer {
         const orgName = (() => {
           try { return (readLocalConfig() as any).installationConfig?.organizationName ?? '' } catch { return '' }
         })()
-        reply(200, { categories, kioskQuestions, feedbackQuestions, orgName })
+        const hoursConfig = (() => {
+          try {
+            const lc = readLocalConfig() as any
+            return lc.kioskHoursConfig ?? null
+          } catch { return null }
+        })()
+        // Per-category waiting count + estimated wait for display on kiosk buttons
+        const today = new Date().toISOString().slice(0, 10)
+        const waitingByCat: Record<string, { waiting: number; estimatedMinutes: number }> = {}
+        for (const cat of categories as any[]) {
+          const waiting = (db.prepare(
+            `SELECT COUNT(*) as c FROM tickets WHERE status='waiting' AND category_id=? AND created_at LIKE ?`
+          ).get(cat.id, `${today}%`) as any).c
+          const avgRow = db.prepare(
+            `SELECT AVG((julianday(served_at)-julianday(called_at))*86400) as avg
+             FROM tickets WHERE status='served' AND category_id=? AND created_at LIKE ? AND served_at IS NOT NULL`
+          ).get(cat.id, `${today}%`) as any
+          const avgSeconds = avgRow?.avg ?? null
+          waitingByCat[cat.id] = {
+            waiting,
+            estimatedMinutes: waiting > 0 && avgSeconds
+              ? Math.ceil((waiting * avgSeconds) / 60)
+              : 0,
+          }
+        }
+        reply(200, { categories, kioskQuestions, feedbackQuestions, orgName, hoursConfig, waitingByCat })
       } catch (e) { reply(500, { error: String(e) }) }
       return
     }
@@ -792,6 +817,13 @@ html,body{height:100%;overflow:hidden;background:#0a0a0f;color:#f4f4f5;font-fami
 .thanks-sub{font-size:clamp(15px,2.5vw,18px);color:#71717a;max-width:500px}
 .thanks-reset{font-size:13px;color:#52525b;margin-top:8px}
 
+/* ── Closed ── */
+.closed-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:24px}
+.closed-icon{font-size:64px;margin-bottom:4px}
+.closed-title{font-size:clamp(26px,5vw,44px);font-weight:800;color:#f4f4f5}
+.closed-msg{font-size:clamp(15px,2.5vw,18px);color:#71717a;max-width:520px;line-height:1.5}
+.closed-hours{display:inline-flex;align-items:center;gap:8px;background:#18181b;border:1px solid #27272a;border-radius:12px;padding:10px 22px;font-size:14px;color:#52525b;margin-top:4px}
+
 /* ── Error ── */
 .err-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;padding:24px}
 .err-icon{font-size:56px}
@@ -807,6 +839,16 @@ html,body{height:100%;overflow:hidden;background:#0a0a0f;color:#f4f4f5;font-fami
   <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px">
     <div class="spinner"></div>
     <p style="font-size:16px;color:#71717a">Loading…</p>
+  </div>
+</div>
+
+<!-- Closed -->
+<div id="s-closed" class="screen">
+  <div class="closed-body">
+    <div class="closed-icon">🕐</div>
+    <div class="closed-title">We Are Closed</div>
+    <div class="closed-msg" id="closed-msg">We are currently closed. Please visit us during our operating hours.</div>
+    <div class="closed-hours" id="closed-hours" style="display:none"></div>
   </div>
 </div>
 
@@ -928,6 +970,7 @@ var KIOSK_LABEL = params.get("label") ? decodeURIComponent(params.get("label")) 
 
 // ── State ────────────────────────────────────────────────────────────────────
 var categories = [], kioskQuestions = [], feedbackQuestions = [], orgName = ""
+var hoursConfig = null, waitingByCat = {}, hoursCheckInterval = null
 var selCat = null
 var visibleQs = [], qIdx = 0, qAnswers = []
 var visibleFbQs = [], fbIdx = 0, fbAnswers = []
@@ -936,6 +979,33 @@ var resetTimer = null
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;") }
+
+function isWithinHours(cfg) {
+  if (!cfg || !cfg.enabled) return true
+  var now = new Date()
+  var day = now.getDay()
+  var days = cfg.days || [0,1,2,3,4,5,6]
+  if (days.indexOf(day) === -1) return false
+  var op = (cfg.openTime || "00:00").split(":").map(Number)
+  var cl = (cfg.closeTime || "23:59").split(":").map(Number)
+  var nowM = now.getHours() * 60 + now.getMinutes()
+  return nowM >= (op[0] * 60 + op[1]) && nowM < (cl[0] * 60 + cl[1])
+}
+
+function showClosedScreen() {
+  if (hoursConfig) {
+    var msgEl = document.getElementById("closed-msg")
+    if (msgEl && hoursConfig.closedMessage) msgEl.textContent = hoursConfig.closedMessage
+    var hoursEl = document.getElementById("closed-hours")
+    if (hoursEl && hoursConfig.openTime && hoursConfig.closeTime) {
+      var DAY_NAMES = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]
+      var openDays = (hoursConfig.days || []).map(function(d) { return DAY_NAMES[d] }).join(", ")
+      hoursEl.textContent = "🕒  " + hoursConfig.openTime + " – " + hoursConfig.closeTime + (openDays ? "   |   " + openDays : "")
+      hoursEl.style.display = ""
+    }
+  }
+  show("s-closed")
+}
 function show(id) {
   document.querySelectorAll(".screen").forEach(function(el) { el.classList.remove("active") })
   document.getElementById(id).classList.add("active")
@@ -983,9 +1053,27 @@ function init() {
       kioskQuestions    = cfg.kioskQuestions || []
       feedbackQuestions = cfg.feedbackQuestions || []
       orgName           = cfg.orgName || ""
+      hoursConfig       = cfg.hoursConfig || null
+      waitingByCat      = cfg.waitingByCat || {}
       setKidLabels()
       buildCategoryGrid()
-      show("s-cats")
+      // Check operating hours — show closed screen if outside hours
+      if (hoursConfig && hoursConfig.enabled && !isWithinHours(hoursConfig)) {
+        showClosedScreen()
+      } else {
+        show("s-cats")
+      }
+      // Periodically re-check hours (e.g. kiosk opens at 08:00 while tablet is already on)
+      if (hoursCheckInterval) clearInterval(hoursCheckInterval)
+      hoursCheckInterval = setInterval(function() {
+        if (hoursConfig && hoursConfig.enabled) {
+          var open = isWithinHours(hoursConfig)
+          var curScreen = document.querySelector(".screen.active")
+          var isClosed = curScreen && curScreen.id === "s-closed"
+          if (!open && !isClosed) { showClosedScreen() }
+          if (open && isClosed) { show("s-cats") }
+        }
+      }, 60000)
     })
     .catch(function(e) {
       document.getElementById("err-msg").textContent = e.message || "Could not connect to server."
@@ -1004,10 +1092,17 @@ function buildCategoryGrid() {
   categories.forEach(function(cat) {
     var btn = document.createElement("button")
     btn.className = "cat-btn"
+    var waitInfo = waitingByCat[cat.id]
+    var waitText = "Tap to get ticket"
+    if (waitInfo && waitInfo.waiting > 0) {
+      waitText = waitInfo.estimatedMinutes > 0
+        ? waitInfo.waiting + " waiting · ~" + waitInfo.estimatedMinutes + " min"
+        : waitInfo.waiting + " people waiting"
+    }
     btn.innerHTML =
       "<div class=\\"cat-code\\" style=\\"background:" + esc(cat.color) + "20;color:" + esc(cat.color) + "\\">" + esc(cat.code) + "</div>" +
       "<div class=\\"cat-label\\">" + esc(cat.label) + "</div>" +
-      "<div class=\\"cat-wait\\">Tap to get ticket</div>" +
+      "<div class=\\"cat-wait\\">" + esc(waitText) + "</div>" +
       "<div class=\\"cat-arrow\\">&#8250;</div>"
     btn.style.setProperty("--c", cat.color)
     btn.addEventListener("click", function() { selectCategory(cat) })

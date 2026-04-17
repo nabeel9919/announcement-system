@@ -9,12 +9,12 @@ import {
   Building2, Monitor, Layers, Printer, Volume2, AlertTriangle, Globe, Music2,
   Film, GripVertical, FolderOpen, Users, Eye, EyeOff, ShieldCheck,
   HelpCircle, ChevronUp, ChevronDown, ToggleLeft, ToggleRight, GitBranch,
-  Star, MessageSquare, Tablet, Copy, Check
+  Star, MessageSquare, Tablet, Copy, Check, Mail, Clock, Send, RefreshCw
 } from 'lucide-react'
 import { WebSpeechProvider, PiperProvider, buildAnnouncementText } from '@announcement/audio-engine'
 import type { UserRole, SystemUser, KioskQuestion, FeedbackQuestion, KioskTerminal } from '@announcement/shared'
 
-type Tab = 'org' | 'audio' | 'categories' | 'windows' | 'printer' | 'broadcast' | 'server' | 'media' | 'users' | 'kiosk' | 'feedback' | 'terminals'
+type Tab = 'org' | 'audio' | 'categories' | 'windows' | 'printer' | 'broadcast' | 'server' | 'media' | 'users' | 'kiosk' | 'feedback' | 'terminals' | 'email'
 
 const COLORS = [
   '#4F46E5', '#0EA5E9', '#10B981', '#F59E0B',
@@ -356,6 +356,7 @@ export default function SettingsPage() {
     { id: 'kiosk', label: 'Kiosk Flow', icon: HelpCircle },
     { id: 'feedback', label: 'Feedback', icon: Star },
     { id: 'terminals', label: 'Kiosk Tablets', icon: Tablet },
+    { id: 'email', label: 'Email Reports', icon: Mail },
     { id: 'printer', label: 'Printer', icon: Printer },
     { id: 'broadcast', label: 'Emergency', icon: AlertTriangle },
     { id: 'server', label: 'Server', icon: Globe },
@@ -1082,6 +1083,9 @@ export default function SettingsPage() {
 
         {/* ── Staff & Roles ─────────────────────────────────────────────────── */}
         {tab === 'users' && <UsersTab />}
+
+        {/* ── Email Reports ─────────────────────────────────────────────────── */}
+        {tab === 'email' && <EmailTab />}
 
         {/* ── Kiosk Tablets ─────────────────────────────────────────────────── */}
         {tab === 'terminals' && (
@@ -1811,6 +1815,9 @@ function KioskFlowTab() {
         </button>
       </div>
 
+      {/* ── Operating Hours ─────────────────────────────────────────────── */}
+      <KioskHoursSection />
+
       {/* Edit / Create drawer */}
       {editing && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-4">
@@ -2263,6 +2270,358 @@ function FeedbackTab() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── Kiosk Operating Hours Section ───────────────────────────────────────────
+
+const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+interface HoursConfig {
+  enabled: boolean; openTime: string; closeTime: string; days: number[]; closedMessage: string
+}
+
+function KioskHoursSection() {
+  const [cfg, setCfg] = useState<HoursConfig>({
+    enabled: false, openTime: '08:00', closeTime: '17:00',
+    days: [1, 2, 3, 4, 5, 6],
+    closedMessage: 'We are currently closed. Please visit us during our operating hours.',
+  })
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    window.api.kioskHoursConfig.get().then((c) => { if (c) setCfg(c as HoursConfig) })
+  }, [])
+
+  async function save() {
+    setSaving(true)
+    await window.api.kioskHoursConfig.set(cfg)
+    setSaving(false); setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+  }
+
+  function toggleDay(d: number) {
+    setCfg((prev) => ({
+      ...prev,
+      days: prev.days.includes(d) ? prev.days.filter((x) => x !== d) : [...prev.days, d].sort((a, b) => a - b),
+    }))
+  }
+
+  return (
+    <div className="mt-10 pt-8 border-t border-zinc-800 space-y-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-base font-semibold text-zinc-100 flex items-center gap-2">
+            <Clock className="w-4 h-4 text-primary-400" /> Operating Hours
+          </h3>
+          <p className="text-sm text-zinc-500 mt-1">
+            Tablets show a "Closed" screen outside these hours. Toggle off for 24/7 operation.
+          </p>
+        </div>
+        <div onClick={() => setCfg((p) => ({ ...p, enabled: !p.enabled }))}
+          className={cn('w-10 h-5 rounded-full flex items-center px-0.5 cursor-pointer transition-colors', cfg.enabled ? 'bg-primary-600' : 'bg-zinc-700')}>
+          <div className={cn('w-4 h-4 rounded-full bg-white transition-transform', cfg.enabled ? 'translate-x-5' : 'translate-x-0')} />
+        </div>
+      </div>
+
+      {cfg.enabled && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1.5">Opening Time</label>
+              <input type="time" value={cfg.openTime}
+                onChange={(e) => setCfg((p) => ({ ...p, openTime: e.target.value }))}
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-1 focus:ring-primary-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1.5">Closing Time</label>
+              <input type="time" value={cfg.closeTime}
+                onChange={(e) => setCfg((p) => ({ ...p, closeTime: e.target.value }))}
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-1 focus:ring-primary-500" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-2">Open Days</label>
+            <div className="flex gap-2 flex-wrap">
+              {DAY_LABELS.map((label, idx) => (
+                <button key={idx} onClick={() => toggleDay(idx)}
+                  className={cn('px-3 py-1.5 rounded-lg border text-sm font-medium transition-colors',
+                    cfg.days.includes(idx)
+                      ? 'border-primary-500 bg-primary-500/10 text-primary-400'
+                      : 'border-zinc-700 bg-zinc-800/50 text-zinc-500 hover:border-zinc-600')}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wide mb-1.5">Closed Screen Message</label>
+            <input value={cfg.closedMessage}
+              onChange={(e) => setCfg((p) => ({ ...p, closedMessage: e.target.value }))}
+              placeholder="We are currently closed. Please visit us during operating hours."
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-primary-500" />
+          </div>
+        </div>
+      )}
+
+      <button onClick={save} disabled={saving}
+        className="flex items-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-500 disabled:opacity-50 px-5 py-2.5 text-sm font-semibold text-white transition-colors">
+        {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+        {saved ? 'Saved!' : 'Save Hours'}
+      </button>
+    </div>
+  )
+}
+
+// ─── Email Reports Tab ────────────────────────────────────────────────────────
+
+interface EmailCfg {
+  enabled: boolean; smtpHost: string; smtpPort: number; secure: boolean
+  username: string; password: string; fromAddress: string; fromName: string
+  recipients: string[]; dailyReportEnabled: boolean; dailyReportTime: string
+  weeklyDigestEnabled: boolean; weeklyDigestDay: number
+}
+
+const WEEK_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+
+function EmailTab() {
+  const [cfg, setCfg] = useState<EmailCfg>({
+    enabled: false, smtpHost: '', smtpPort: 587, secure: false,
+    username: '', password: '', fromAddress: '', fromName: 'Queue System Reports',
+    recipients: [], dailyReportEnabled: true, dailyReportTime: '17:00',
+    weeklyDigestEnabled: false, weeklyDigestDay: 1,
+  })
+  const [newRecipient, setNewRecipient] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [sending, setSending] = useState<'daily' | 'weekly' | null>(null)
+  const [sendResult, setSendResult] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [showPassword, setShowPassword] = useState(false)
+
+  useEffect(() => {
+    window.api.email.getConfig().then((c) => { if (c) setCfg(c as EmailCfg) })
+  }, [])
+
+  async function save() {
+    setSaving(true)
+    await window.api.email.setConfig(cfg)
+    setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2500)
+  }
+
+  async function sendTest() {
+    setTesting(true); setTestResult(null)
+    await save()
+    const r = await window.api.email.sendTest()
+    setTesting(false)
+    setTestResult(r.success ? { ok: true, msg: 'Test email sent successfully!' } : { ok: false, msg: r.error ?? 'Failed' })
+  }
+
+  async function sendNow(type: 'daily' | 'weekly') {
+    setSending(type); setSendResult(null)
+    const r = type === 'daily' ? await window.api.email.sendDailyNow() : await window.api.email.sendWeeklyNow()
+    setSending(null)
+    setSendResult(r.success
+      ? { ok: true, msg: `${type === 'daily' ? 'Daily report' : 'Weekly digest'} sent!` }
+      : { ok: false, msg: r.error ?? 'Failed' })
+    setTimeout(() => setSendResult(null), 5000)
+  }
+
+  function addRecipient() {
+    const e = newRecipient.trim().toLowerCase()
+    if (!e || !e.includes('@') || cfg.recipients.includes(e)) return
+    setCfg((p) => ({ ...p, recipients: [...p.recipients, e] }))
+    setNewRecipient('')
+  }
+
+  const field = 'w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-primary-500'
+
+  return (
+    <div className="space-y-6 max-w-2xl">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
+            <Mail className="w-4 h-4 text-primary-400" /> Email Reports
+          </h2>
+          <p className="text-sm text-zinc-500 mt-1">Automated daily and weekly reports delivered to management inboxes.</p>
+        </div>
+        <div onClick={() => setCfg((p) => ({ ...p, enabled: !p.enabled }))}
+          className={cn('w-10 h-5 rounded-full flex items-center px-0.5 cursor-pointer transition-colors', cfg.enabled ? 'bg-primary-600' : 'bg-zinc-700')}>
+          <div className={cn('w-4 h-4 rounded-full bg-white transition-transform', cfg.enabled ? 'translate-x-5' : 'translate-x-0')} />
+        </div>
+      </div>
+
+      {/* SMTP */}
+      <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5 space-y-4">
+        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wide">SMTP Server</p>
+        <div className="grid grid-cols-3 gap-3">
+          <div className="col-span-2">
+            <label className="block text-xs text-zinc-500 mb-1">Host</label>
+            <input value={cfg.smtpHost} onChange={(e) => setCfg((p) => ({ ...p, smtpHost: e.target.value }))}
+              placeholder="smtp.gmail.com" className={field} />
+          </div>
+          <div>
+            <label className="block text-xs text-zinc-500 mb-1">Port</label>
+            <input type="number" value={cfg.smtpPort}
+              onChange={(e) => setCfg((p) => ({ ...p, smtpPort: Number(e.target.value) }))} className={field} />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs text-zinc-500 mb-1">Username / Email</label>
+            <input value={cfg.username} onChange={(e) => setCfg((p) => ({ ...p, username: e.target.value }))}
+              placeholder="you@gmail.com" autoComplete="off" className={field} />
+          </div>
+          <div>
+            <label className="block text-xs text-zinc-500 mb-1">Password / App Password</label>
+            <div className="relative">
+              <input type={showPassword ? 'text' : 'password'} value={cfg.password}
+                onChange={(e) => setCfg((p) => ({ ...p, password: e.target.value }))}
+                placeholder="••••••••" autoComplete="new-password" className={cn(field, 'pr-9')} />
+              <button type="button" onClick={() => setShowPassword((x) => !x)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 transition-colors">
+                {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+          </div>
+        </div>
+        <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
+          <input type="checkbox" checked={cfg.secure}
+            onChange={(e) => setCfg((p) => ({ ...p, secure: e.target.checked }))}
+            className="rounded border-zinc-700 bg-zinc-800 text-primary-500" />
+          <span className="text-sm text-zinc-400">Use SSL/TLS (port 465)</span>
+        </label>
+      </div>
+
+      {/* Sender */}
+      <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5 space-y-3">
+        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wide">Sender (no-reply)</p>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs text-zinc-500 mb-1">From Address</label>
+            <input value={cfg.fromAddress} onChange={(e) => setCfg((p) => ({ ...p, fromAddress: e.target.value }))}
+              placeholder="noreply@clinic.co.tz" className={field} />
+          </div>
+          <div>
+            <label className="block text-xs text-zinc-500 mb-1">From Name</label>
+            <input value={cfg.fromName} onChange={(e) => setCfg((p) => ({ ...p, fromName: e.target.value }))}
+              placeholder="Queue System Reports" className={field} />
+          </div>
+        </div>
+      </div>
+
+      {/* Recipients */}
+      <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5 space-y-3">
+        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wide">Recipients</p>
+        <div className="flex gap-2">
+          <input value={newRecipient} onChange={(e) => setNewRecipient(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && addRecipient()}
+            placeholder="manager@clinic.co.tz" className={cn(field, 'flex-1')} />
+          <button onClick={addRecipient}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-800/50 hover:bg-zinc-800 text-xs text-zinc-300 transition-colors flex-shrink-0">
+            <Plus className="w-3.5 h-3.5" /> Add
+          </button>
+        </div>
+        {cfg.recipients.length > 0 ? (
+          <div className="space-y-1.5">
+            {cfg.recipients.map((r) => (
+              <div key={r} className="flex items-center gap-2 bg-zinc-800/50 rounded-lg px-3 py-2">
+                <Mail className="w-3.5 h-3.5 text-zinc-500 flex-shrink-0" />
+                <span className="flex-1 text-sm text-zinc-300">{r}</span>
+                <button onClick={() => setCfg((p) => ({ ...p, recipients: p.recipients.filter((x) => x !== r) }))}
+                  className="text-zinc-600 hover:text-red-400 transition-colors"><X className="w-3.5 h-3.5" /></button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-zinc-600 italic">No recipients yet. Add at least one email address.</p>
+        )}
+      </div>
+
+      {/* Schedule */}
+      <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5 space-y-4">
+        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wide">Schedule</p>
+        <div className="flex items-center gap-4">
+          <div onClick={() => setCfg((p) => ({ ...p, dailyReportEnabled: !p.dailyReportEnabled }))}
+            className={cn('w-10 h-5 rounded-full flex items-center px-0.5 cursor-pointer transition-colors flex-shrink-0',
+              cfg.dailyReportEnabled ? 'bg-primary-600' : 'bg-zinc-700')}>
+            <div className={cn('w-4 h-4 rounded-full bg-white transition-transform', cfg.dailyReportEnabled ? 'translate-x-5' : 'translate-x-0')} />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-medium text-zinc-300">Daily end-of-day report</p>
+            <p className="text-xs text-zinc-600">Tickets served, service rate, and category breakdown</p>
+          </div>
+          <input type="time" value={cfg.dailyReportTime}
+            onChange={(e) => setCfg((p) => ({ ...p, dailyReportTime: e.target.value }))}
+            disabled={!cfg.dailyReportEnabled}
+            className="rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-1.5 text-sm text-zinc-100 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-40 w-28" />
+        </div>
+        <div className="flex items-center gap-4">
+          <div onClick={() => setCfg((p) => ({ ...p, weeklyDigestEnabled: !p.weeklyDigestEnabled }))}
+            className={cn('w-10 h-5 rounded-full flex items-center px-0.5 cursor-pointer transition-colors flex-shrink-0',
+              cfg.weeklyDigestEnabled ? 'bg-primary-600' : 'bg-zinc-700')}>
+            <div className={cn('w-4 h-4 rounded-full bg-white transition-transform', cfg.weeklyDigestEnabled ? 'translate-x-5' : 'translate-x-0')} />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-medium text-zinc-300">Weekly feedback digest</p>
+            <p className="text-xs text-zinc-600">7-day ticket volume, satisfaction score, and daily breakdown</p>
+          </div>
+          <select value={cfg.weeklyDigestDay}
+            onChange={(e) => setCfg((p) => ({ ...p, weeklyDigestDay: Number(e.target.value) }))}
+            disabled={!cfg.weeklyDigestEnabled}
+            className="rounded-lg border border-zinc-700 bg-zinc-800/50 px-2 py-1.5 text-sm text-zinc-100 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:opacity-40">
+            {WEEK_DAYS.map((d, i) => <option key={i} value={i}>{d}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {testResult && (
+        <div className={cn('rounded-lg border px-4 py-3 text-sm font-medium',
+          testResult.ok ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-red-500/10 border-red-500/30 text-red-400')}>
+          {testResult.msg}
+        </div>
+      )}
+      {sendResult && (
+        <div className={cn('rounded-lg border px-4 py-3 text-sm font-medium',
+          sendResult.ok ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-red-500/10 border-red-500/30 text-red-400')}>
+          {sendResult.msg}
+        </div>
+      )}
+
+      <div className="flex items-center gap-3 flex-wrap">
+        <button onClick={save} disabled={saving}
+          className="flex items-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-500 disabled:opacity-50 px-5 py-2.5 text-sm font-semibold text-white transition-colors">
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+          {saved ? 'Saved!' : 'Save Settings'}
+        </button>
+        <button onClick={sendTest} disabled={testing || !cfg.smtpHost || !cfg.fromAddress || cfg.recipients.length === 0}
+          className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800/50 hover:bg-zinc-800 disabled:opacity-40 px-4 py-2.5 text-sm text-zinc-300 transition-colors">
+          {testing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+          Send Test Email
+        </button>
+        <button onClick={() => sendNow('daily')} disabled={!!sending || !cfg.enabled || cfg.recipients.length === 0}
+          className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800/50 hover:bg-zinc-800 disabled:opacity-40 px-4 py-2.5 text-sm text-zinc-300 transition-colors">
+          {sending === 'daily' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+          Send Daily Now
+        </button>
+        <button onClick={() => sendNow('weekly')} disabled={!!sending || !cfg.enabled || cfg.recipients.length === 0}
+          className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800/50 hover:bg-zinc-800 disabled:opacity-40 px-4 py-2.5 text-sm text-zinc-300 transition-colors">
+          {sending === 'weekly' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+          Send Weekly Now
+        </button>
+      </div>
+
+      <div className="rounded-xl border border-zinc-700/40 bg-zinc-900/30 p-4">
+        <p className="text-xs font-semibold text-zinc-400 mb-1.5">Using Gmail?</p>
+        <p className="text-xs text-zinc-600 leading-relaxed">
+          Host: <span className="text-zinc-400 font-mono">smtp.gmail.com</span> · Port: <span className="text-zinc-400 font-mono">587</span> ·
+          Use an <span className="text-zinc-400">App Password</span> (not your regular password) — generate one at{' '}
+          <span className="text-zinc-400">Google Account → Security → 2-Step Verification → App passwords</span>.
+        </p>
+      </div>
     </div>
   )
 }

@@ -8,6 +8,7 @@ import { setupPrintHandlers } from './print'
 import { checkLicense } from './license'
 import { LanServer } from './lan-server'
 import { scheduleDbBackup } from './db-backup'
+import { scheduleEmailReports } from './email-reporter'
 
 // Register custom scheme before app is ready (required by Electron)
 protocol.registerSchemesAsPrivileged([
@@ -37,6 +38,9 @@ app.whenReady().then(async () => {
 
   // Schedule automatic daily DB backup (runs once now + every midnight)
   scheduleDbBackup()
+
+  // Schedule automated email reports (daily + weekly digest)
+  scheduleEmailReports(() => getDb())
 
   // Register local-video:// protocol for serving userData video files
   registerVideoProtocol()

@@ -49,6 +49,7 @@ const api = {
       estimatedWaitSeconds: number
       estimatedWaitMinutes: number
     }> => ipcRenderer.invoke('stats:waitTime', categoryId),
+    operatorPerformance: (days?: number): Promise<unknown[]> => ipcRenderer.invoke('stats:operatorPerformance', days),
   },
 
   // ─── Audit log ─────────────────────────────────────────────────────────
@@ -201,6 +202,21 @@ const api = {
   kioskIdleConfig: {
     get: (): Promise<unknown> => ipcRenderer.invoke('kiosk:idleConfig.get'),
     set: (cfg: unknown): Promise<{ success: boolean }> => ipcRenderer.invoke('kiosk:idleConfig.set', cfg),
+  },
+
+  // ─── Kiosk Operating Hours ─────────────────────────────────────────────
+  kioskHoursConfig: {
+    get: (): Promise<unknown> => ipcRenderer.invoke('kiosk:hoursConfig.get'),
+    set: (cfg: unknown): Promise<{ success: boolean }> => ipcRenderer.invoke('kiosk:hoursConfig.set', cfg),
+  },
+
+  // ─── Email Reports ─────────────────────────────────────────────────────
+  email: {
+    getConfig: (): Promise<unknown> => ipcRenderer.invoke('email:config.get'),
+    setConfig: (cfg: unknown): Promise<{ success: boolean }> => ipcRenderer.invoke('email:config.set', cfg),
+    sendTest: (): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('email:sendTest'),
+    sendDailyNow: (): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('email:sendDailyNow'),
+    sendWeeklyNow: (): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('email:sendWeeklyNow'),
   },
 
   // ─── Kiosk Questions ───────────────────────────────────────────────────

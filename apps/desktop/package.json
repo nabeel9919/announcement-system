@@ -1,7 +1,7 @@
 {
   "name": "@announcement/desktop",
   "version": "1.2.0",
-  "description": "Announcement System — Desktop Client",
+  "description": "Announcement System \u2014 Desktop Client",
   "author": {
     "name": "Nabil",
     "email": "hamadnabil0081@gmail.com"
@@ -24,7 +24,8 @@
     "better-sqlite3": "^11.7.0",
     "electron-updater": "^6.3.0",
     "node-machine-id": "^1.1.12",
-    "node-thermal-printer": "^4.6.0"
+    "node-thermal-printer": "^4.6.0",
+    "nodemailer": "6.9.x"
   },
   "devDependencies": {
     "@electron-toolkit/preload": "^3.0.0",
@@ -41,6 +42,7 @@
     "@radix-ui/react-tabs": "^1.1.0",
     "@radix-ui/react-toast": "^1.2.0",
     "@types/better-sqlite3": "^7.6.0",
+    "@types/nodemailer": "^6.4.0",
     "@types/node": "^20.0.0",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
