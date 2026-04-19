@@ -183,9 +183,12 @@ export default function SettingsPage() {
 
   async function deleteCat(id: string) {
     if (!confirm('Delete this category? Existing tickets will remain but no new ones can be issued.')) return
-    // Soft delete: we don't have a delete API yet, so just remove from UI + overwrite with empty
-    // For now filter from store — TODO: add categories:delete IPC
-    setCategories(categories.filter((c) => c.id !== id))
+    try {
+      await window.api.categories.delete(id)
+      setCategories(categories.filter((c) => c.id !== id))
+    } catch (e) {
+      alert(`Failed to delete category: ${e}`)
+    }
   }
 
   // ── Window CRUD

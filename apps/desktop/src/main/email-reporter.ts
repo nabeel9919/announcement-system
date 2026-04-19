@@ -352,30 +352,40 @@ export function scheduleEmailReports(getDb: () => any): void {
   _getDb = getDb
 
   setInterval(async () => {
-    const cfg = getEmailConfig()
-    if (!cfg.enabled || !cfg.smtpHost || cfg.recipients.length === 0) return
+    try {
+      const cfg = getEmailConfig()
+      if (!cfg.enabled || !cfg.smtpHost || cfg.recipients.length === 0) return
 
-    const now = new Date()
-    const todayStr = now.toISOString().slice(0, 10)
-    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+      const now = new Date()
+      const todayStr = now.toISOString().slice(0, 10)
+      const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
 
-    // Daily report
-    if (cfg.dailyReportEnabled && timeStr === cfg.dailyReportTime && lastDailyDate !== todayStr) {
-      lastDailyDate = todayStr
-      sendDailyReport(getDb).then((r) => {
-        if (r.success) console.log('[Email] Daily report sent')
-        else console.error('[Email] Daily report failed:', r.error)
-      })
-    }
+      // Daily report
+      if (cfg.dailyReportEnabled && timeStr === cfg.dailyReportTime && lastDailyDate !== todayStr) {
+        lastDailyDate = todayStr
+        try {
+          const r = await sendDailyReport(getDb)
+          if (r.success) console.log('[Email] Daily report sent')
+          else console.error('[Email] Daily report failed:', r.error)
+        } catch (e) {
+          console.error('[Email] Daily report threw:', e)
+        }
+      }
 
-    // Weekly digest — send on configured day at the same daily-report time
-    if (cfg.weeklyDigestEnabled && now.getDay() === cfg.weeklyDigestDay
-      && timeStr === cfg.dailyReportTime && lastWeeklyDate !== todayStr) {
-      lastWeeklyDate = todayStr
-      sendWeeklyDigest(getDb).then((r) => {
-        if (r.success) console.log('[Email] Weekly digest sent')
-        else console.error('[Email] Weekly digest failed:', r.error)
-      })
+      // Weekly digest — send on configured day at the same daily-report time
+      if (cfg.weeklyDigestEnabled && now.getDay() === cfg.weeklyDigestDay
+        && timeStr === cfg.dailyReportTime && lastWeeklyDate !== todayStr) {
+        lastWeeklyDate = todayStr
+        try {
+          const r = await sendWeeklyDigest(getDb)
+          if (r.success) console.log('[Email] Weekly digest sent')
+          else console.error('[Email] Weekly digest failed:', r.error)
+        } catch (e) {
+          console.error('[Email] Weekly digest threw:', e)
+        }
+      }
+    } catch (e) {
+      console.error('[Email scheduler] Unexpected error:', e)
     }
   }, 60_000)  // tick every minute
 }

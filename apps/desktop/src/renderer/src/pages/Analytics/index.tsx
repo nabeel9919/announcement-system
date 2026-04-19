@@ -24,8 +24,8 @@ export default function AnalyticsPage() {
   async function load() {
     setLoading(true)
     const [s, tickets, fbSummary] = await Promise.all([
-      window.api.stats.today(),
-      window.api.tickets.list(),
+      window.api.stats.today().catch(() => ({ waiting: 0, called: 0, served: 0, skipped: 0, noShow: 0 })),
+      window.api.tickets.list().catch(() => []),
       window.api.feedback.summary(30).catch(() => ({ total: 0, ratings: [], choices: [] })),
     ])
     setStats(s as any)

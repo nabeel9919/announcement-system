@@ -32,6 +32,7 @@ const api = {
   categories: {
     list: () => ipcRenderer.invoke('categories:list'),
     upsert: (category: Record<string, unknown>) => ipcRenderer.invoke('categories:upsert', category),
+    delete: (id: string): Promise<{ success: boolean }> => ipcRenderer.invoke('categories:delete', id),
   },
 
   // ─── Windows ───────────────────────────────────────────────────────────

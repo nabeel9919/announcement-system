@@ -112,11 +112,17 @@ app.whenReady().then(async () => {
   const licenseStatus = await checkLicense()
   if (licenseStatus !== 'ok') {
     const route = licenseStatus === 'expired' ? '/expired' : '/setup'
-    const sendNav = () => operatorWindow!.webContents.send('navigate', route)
-    if (operatorWindow.webContents.isLoading()) {
-      operatorWindow.webContents.once('did-finish-load', sendNav)
-    } else {
-      sendNav()
+    const sendNav = () => {
+      if (operatorWindow && !operatorWindow.isDestroyed()) {
+        operatorWindow.webContents.send('navigate', route)
+      }
+    }
+    if (operatorWindow && !operatorWindow.isDestroyed()) {
+      if (operatorWindow.webContents.isLoading()) {
+        operatorWindow.webContents.once('did-finish-load', sendNav)
+      } else {
+        sendNav()
+      }
     }
   }
 

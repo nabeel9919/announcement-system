@@ -350,12 +350,11 @@ export class LanServer {
       const { tickets, windows, categories } = this.getQueue()
       res.write(`event: queue\ndata: ${JSON.stringify({ tickets, windows, categories })}\n\n`)
       res.write(`event: stats\ndata: ${JSON.stringify(this.getStats())}\n\n`)
-      req.socket.on('close', () => this.sseClients.delete(res))
       const ping = setInterval(() => {
         try { res.write(`event: ping\ndata: {}\n\n`) }
         catch { clearInterval(ping); this.sseClients.delete(res) }
       }, 25000)
-      req.socket.on('close', () => clearInterval(ping))
+      req.socket.on('close', () => { clearInterval(ping); this.sseClients.delete(res) })
       return
     }
 

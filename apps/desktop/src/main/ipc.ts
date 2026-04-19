@@ -24,6 +24,11 @@ export function getDb(): Database.Database {
   return db
 }
 
+function safeJsonParse<T = unknown>(json: string | null | undefined, fallback: T): T {
+  if (!json) return fallback
+  try { return JSON.parse(json) as T } catch { return fallback }
+}
+
 function initSchema(db: Database.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS tickets (
@@ -261,7 +266,7 @@ export function setupIpcHandlers(): void {
       id: row.id,
       code: row.code,
       label: row.label,
-      windowIds: JSON.parse(row.window_ids ?? '[]'),
+      windowIds: safeJsonParse(row.window_ids, [] as string[]),
       color: row.color,
       prefix: row.prefix,
     }
@@ -392,6 +397,12 @@ export function setupIpcHandlers(): void {
     return (db.prepare('SELECT * FROM categories').all() as any[]).map(mapCategory)
   })
 
+  ipcMain.handle('categories:delete', (_event, id: string) => {
+    const db = getDb()
+    db.prepare('DELETE FROM categories WHERE id = ?').run(id)
+    return { success: true }
+  })
+
   ipcMain.handle('categories:upsert', (_event, category: Record<string, unknown>) => {
     const db = getDb()
     db.prepare(`
@@ -486,7 +497,8 @@ export function setupIpcHandlers(): void {
 
   ipcMain.handle('audit:recent', (_event, limit = 100) => {
     const db = getDb()
-    return db.prepare(`SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ?`).all(limit)
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 100, 500))
+    return db.prepare(`SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ?`).all(safeLimit)
   })
 
   // ─── Users / RBAC ────────────────────────────────────────────────────────
@@ -692,7 +704,7 @@ export function setupIpcHandlers(): void {
       categoryId: row.category_id ?? null,
       question: row.question,
       type: row.type,
-      options: JSON.parse(row.options ?? '[]'),
+      options: safeJsonParse(row.options, [] as string[]),
       orderIndex: row.order_index,
       isEnabled: row.is_enabled === 1,
       dependsOnQuestionId: row.depends_on_question_id ?? null,
@@ -818,7 +830,7 @@ export function setupIpcHandlers(): void {
       id: row.id,
       question: row.question,
       type: row.type,
-      options: JSON.parse(row.options ?? '[]'),
+      options: safeJsonParse(row.options, [] as string[]),
       orderIndex: row.order_index,
       isEnabled: row.is_enabled === 1,
       isRequired: row.is_required === 1,
@@ -885,8 +897,7 @@ export function setupIpcHandlers(): void {
   /** Submit a feedback response */
   ipcMain.handle('feedback:submit', (_event, response: any) => {
     const db = getDb()
-    const { randomUUID } = require('crypto')
-    const id = response.id ?? randomUUID()
+    const id = response.id ?? crypto.randomUUID()
     const now = new Date().toISOString()
     db.prepare(`
       INSERT INTO feedback_responses (id, submitted_at, category_id, category_label, answers)
@@ -898,21 +909,23 @@ export function setupIpcHandlers(): void {
   /** Fetch responses for analytics — defaults to last 30 days */
   ipcMain.handle('feedback:responses.list', (_event, days = 30) => {
     const db = getDb()
-    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+    const safeDays = Math.max(1, Math.min(Number(days) || 30, 365))
+    const since = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000).toISOString()
     const rows = db.prepare(`SELECT * FROM feedback_responses WHERE submitted_at >= ? ORDER BY submitted_at DESC`).all(since) as any[]
     return rows.map(r => ({
       id: r.id,
       submittedAt: r.submitted_at,
       categoryId: r.category_id,
       categoryLabel: r.category_label,
-      answers: JSON.parse(r.answers ?? '[]'),
+      answers: safeJsonParse(r.answers, [] as any[]),
     }))
   })
 
   /** Summary stats for the feedback dashboard */
   ipcMain.handle('feedback:summary', (_event, days = 30) => {
     const db = getDb()
-    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+    const safeDays = Math.max(1, Math.min(Number(days) || 30, 365))
+    const since = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000).toISOString()
     const rows = db.prepare(`SELECT answers FROM feedback_responses WHERE submitted_at >= ?`).all(since) as any[]
 
     const total = rows.length
@@ -921,7 +934,7 @@ export function setupIpcHandlers(): void {
     const choiceMap: Record<string, Record<string, number>> = {}
 
     for (const row of rows) {
-      const answers: any[] = JSON.parse(row.answers ?? '[]')
+      const answers: any[] = safeJsonParse(row.answers, [] as any[])
       for (const a of answers) {
         if (a.type === 'star' || a.type === 'emoji') {
           if (!scoreMap[a.questionId]) scoreMap[a.questionId] = { sum: 0, count: 0, label: a.question }
@@ -951,7 +964,8 @@ export function setupIpcHandlers(): void {
   /** Comprehensive feedback report for leadership — aggregates all dimensions */
   ipcMain.handle('feedback:report', (_event, days = 30) => {
     const db = getDb()
-    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+    const safeDays = Math.max(1, Math.min(Number(days) || 30, 365))
+    const since = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000).toISOString()
     const rows = db.prepare(`
       SELECT id, submitted_at, category_id, category_label, answers
       FROM feedback_responses WHERE submitted_at >= ?
@@ -960,7 +974,7 @@ export function setupIpcHandlers(): void {
 
     // Seed daily buckets so every day in range appears even with 0 responses
     const dailyMap: Record<string, { count: number; scoreSum: number; scoreCount: number }> = {}
-    for (let i = days - 1; i >= 0; i--) {
+    for (let i = safeDays - 1; i >= 0; i--) {
       const d = new Date(Date.now() - i * 86_400_000).toISOString().slice(0, 10)
       dailyMap[d] = { count: 0, scoreSum: 0, scoreCount: 0 }
     }
@@ -984,7 +998,7 @@ export function setupIpcHandlers(): void {
       if (!catMap[catKey]) catMap[catKey] = { label: row.category_label ?? 'General', count: 0, scoreSum: 0, scoreCount: 0 }
       catMap[catKey].count++
 
-      const answers: any[] = JSON.parse(row.answers ?? '[]')
+      const answers: any[] = safeJsonParse(row.answers, [] as any[])
 
       for (const a of answers) {
         const qId = a.questionId as string
@@ -1098,11 +1112,12 @@ export function setupIpcHandlers(): void {
 
   ipcMain.handle('stats:operatorPerformance', (_event, days = 1) => {
     const db = getDb()
-    const since = days === 1
+    const safeDays = Math.max(1, Math.min(Number(days) || 1, 365))
+    const since = safeDays === 1
       ? new Date().toISOString().slice(0, 10)  // today only (LIKE query)
-      : new Date(Date.now() - days * 86_400_000).toISOString()
+      : new Date(Date.now() - safeDays * 86_400_000).toISOString()
 
-    const rows = days === 1
+    const rows = safeDays === 1
       ? db.prepare(`
           SELECT callee_name, window_id,
             COUNT(*) as total_called,
