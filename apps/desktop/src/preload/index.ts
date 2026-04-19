@@ -149,9 +149,11 @@ const api = {
     /** Download Piper binary + voice model — resolves when done */
     download: (lang?: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke('piper:download', lang ?? 'sw'),
-    /** Subscribe to download progress events */
-    onDownloadProgress: (cb: (info: { step: string; percent: number }) => void) => {
-      ipcRenderer.on('piper:download-progress', (_e, info) => cb(info))
+    /** Subscribe to download progress events — returns an unsubscribe function */
+    onDownloadProgress: (cb: (info: { step: string; percent: number }) => void): (() => void) => {
+      const handler = (_e: Electron.IpcRendererEvent, info: { step: string; percent: number }) => cb(info)
+      ipcRenderer.on('piper:download-progress', handler)
+      return () => ipcRenderer.removeListener('piper:download-progress', handler)
     },
   },
 

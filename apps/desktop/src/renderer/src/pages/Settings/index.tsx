@@ -134,11 +134,12 @@ export default function SettingsPage() {
     WebSpeechProvider.getVoices().then(setVoices)
     // Check Piper availability
     PiperProvider.isAvailable('sw').then(setPiperAvailable)
-    // Subscribe to download progress
-    window.api.piper.onDownloadProgress(({ step, percent }) => {
+    // Subscribe to download progress — unsubscribe on unmount
+    const unsubPiper = window.api.piper.onDownloadProgress(({ step, percent }) => {
       setPiperDownloadStep(step)
       setPiperDownloadPct(percent)
     })
+    return () => { unsubPiper() }
     // Load video playlist
     window.api.videos.list().then(setVideos)
     window.api.videos.getDir().then(setVideosDir)

@@ -2,6 +2,10 @@ import { ipcMain, app, protocol, net } from 'electron'
 import Database from 'better-sqlite3'
 import { createHash } from 'crypto'
 import bcrypt from 'bcryptjs'
+import { mkdirSync, createWriteStream, existsSync as fsExistsSync, chmodSync, copyFileSync, unlinkSync } from 'fs'
+import { pipeline } from 'stream/promises'
+import { spawnSync } from 'child_process'
+import { tmpdir } from 'os'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { readLocalConfig, writeLocalConfig } from './license'
@@ -729,110 +733,98 @@ export function setupIpcHandlers(): void {
     return wav.toString('base64')
   })
 
+  const PIPER_VERSION = '2023.11.14-2'
+  const PIPER_MODELS: Record<string, { name: string; base: string }> = {
+    sw: {
+      name: 'sw_CD-lanfrica-medium',
+      base: 'https://huggingface.co/rhasspy/piper-voices/resolve/main/sw/sw_CD/lanfrica/medium',
+    },
+    en: {
+      name: 'en_US-lessac-medium',
+      base: 'https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium',
+    },
+  }
+  const PIPER_BIN_ASSETS: Record<string, string> = {
+    'linux-x64':    'piper_linux_x86_64.tar.gz',
+    'linux-arm64':  'piper_linux_aarch64.tar.gz',
+    'win32-x64':    'piper_windows_amd64.zip',
+    'darwin-arm64': 'piper_macos_aarch64.tar.gz',
+    'darwin-x64':   'piper_macos_x64.tar.gz',
+  }
+
+  async function fetchOrThrow(url: string): Promise<Response> {
+    const res = await fetch(url, { redirect: 'follow' })
+    if (!res.ok) throw new Error(`HTTP ${res.status} — ${url}`)
+    return res
+  }
+
   /** Download Piper binary + voice model to userData/piper — sends progress events */
   ipcMain.handle('piper:download', async (event, lang = 'sw') => {
-    const { mkdirSync, createWriteStream, existsSync: fsExists, chmodSync } = await import('fs')
-    const { pipeline } = await import('stream/promises')
-    const { spawnSync } = await import('child_process')
-    const { tmpdir } = await import('os')
-
     const outDir = getPiperUserDataDir()
     mkdirSync(outDir, { recursive: true })
 
     const send = (step: string, percent: number) =>
       event.sender.send('piper:download-progress', { step, percent })
 
-    const MODELS: Record<string, { name: string; base: string }> = {
-      sw: {
-        name: 'sw_CD-lanfrica-medium',
-        base: 'https://huggingface.co/rhasspy/piper-voices/resolve/main/sw/sw_CD/lanfrica/medium',
-      },
-      en: {
-        name: 'en_US-lessac-medium',
-        base: 'https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium',
-      },
-    }
-
-    const model = MODELS[lang] ?? MODELS['sw']
+    const model = PIPER_MODELS[lang] ?? PIPER_MODELS['sw']
 
     try {
-      // ── Step 1: Binary (download only if missing from both userData and resources) ──
       const binName = process.platform === 'win32' ? 'piper.exe' : 'piper'
       const binDest = join(outDir, binName)
       const bundledBin = getPiperBin()
 
-      if (!fsExists(binDest)) {
-        if (fsExists(bundledBin)) {
-          // Copy bundled binary to userData so it's writable/upgradeable
-          const { copyFileSync } = await import('fs')
+      if (!fsExistsSync(binDest)) {
+        if (fsExistsSync(bundledBin)) {
           send('Copying Piper binary…', 5)
           copyFileSync(bundledBin, binDest)
           if (process.platform !== 'win32') chmodSync(binDest, 0o755)
           send('Binary ready', 15)
         } else {
-          // Download from GitHub
-          const VERSION = '2023.11.14-2'
-          const assetMap: Record<string, string> = {
-            'linux-x64':   'piper_linux_x86_64.tar.gz',
-            'linux-arm64': 'piper_linux_aarch64.tar.gz',
-            'win32-x64':   'piper_windows_amd64.zip',
-            'darwin-arm64':'piper_macos_aarch64.tar.gz',
-            'darwin-x64':  'piper_macos_x64.tar.gz',
-          }
           const assetKey = `${process.platform}-${process.arch}`
-          const assetFile = assetMap[assetKey]
+          const assetFile = PIPER_BIN_ASSETS[assetKey]
           if (!assetFile) throw new Error(`Unsupported platform: ${assetKey}`)
-
           send('Downloading Piper binary…', 5)
           const tmpArchive = join(tmpdir(), `piper_bin_${crypto.randomUUID()}.tar.gz`)
-          const binRes = await fetch(`https://github.com/rhasspy/piper/releases/download/${VERSION}/${assetFile}`, { redirect: 'follow' })
-          if (!binRes.ok) throw new Error(`Binary download failed: HTTP ${binRes.status}`)
+          const binRes = await fetchOrThrow(`https://github.com/rhasspy/piper/releases/download/${PIPER_VERSION}/${assetFile}`)
           await pipeline(binRes.body as any, createWriteStream(tmpArchive))
-
           send('Extracting binary…', 20)
           spawnSync('tar', ['xzf', tmpArchive, '-C', outDir, '--strip-components=1'], { stdio: 'inherit' })
-          try { (await import('fs')).unlinkSync(tmpArchive) } catch { /* ignore */ }
-          if (process.platform !== 'win32' && fsExists(binDest)) chmodSync(binDest, 0o755)
+          try { unlinkSync(tmpArchive) } catch { /* ignore */ }
+          if (process.platform !== 'win32') chmodSync(binDest, 0o755)
           send('Binary ready', 25)
         }
       } else {
         send('Binary already present', 15)
       }
 
-      // ── Step 2: Model .onnx ────────────────────────────────────────────────
       const modelDest = join(outDir, `${model.name}.onnx`)
-      if (!fsExists(modelDest)) {
-        send(`Downloading voice model (${model.name})…`, 30)
-        const modelRes = await fetch(`${model.base}/${model.name}.onnx`, { redirect: 'follow' })
-        if (!modelRes.ok) throw new Error(`Model download failed: HTTP ${modelRes.status}`)
-
+      if (!fsExistsSync(modelDest)) {
+        send(`Downloading voice model…`, 30)
+        const modelRes = await fetchOrThrow(`${model.base}/${model.name}.onnx`)
         const total = Number(modelRes.headers.get('content-length') ?? 0)
         let received = 0
         const writer = createWriteStream(modelDest)
         const reader = (modelRes.body as any).getReader()
-
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          writer.write(value)
-          received += value.length
-          if (total > 0) {
-            const pct = Math.round(30 + (received / total) * 55)
-            send(`Downloading voice model… ${Math.round(received / 1_048_576)} MB`, pct)
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            writer.write(value)
+            received += value.length
+            if (total > 0) send(`Downloading… ${Math.round(received / 1_048_576)} MB`, Math.round(30 + (received / total) * 55))
           }
+        } finally {
+          await new Promise<void>((res, rej) => writer.end((e?: Error | null) => e ? rej(e) : res()))
         }
-        await new Promise<void>((res, rej) => writer.end((e?: Error | null) => e ? rej(e) : res()))
         send('Model downloaded', 87)
       } else {
         send('Model already present', 87)
       }
 
-      // ── Step 3: Model config JSON ──────────────────────────────────────────
       const jsonDest = join(outDir, `${model.name}.onnx.json`)
-      if (!fsExists(jsonDest)) {
+      if (!fsExistsSync(jsonDest)) {
         send('Downloading model config…', 90)
-        const cfgRes = await fetch(`${model.base}/${model.name}.onnx.json`, { redirect: 'follow' })
-        if (!cfgRes.ok) throw new Error(`Config download failed: HTTP ${cfgRes.status}`)
+        const cfgRes = await fetchOrThrow(`${model.base}/${model.name}.onnx.json`)
         await pipeline(cfgRes.body as any, createWriteStream(jsonDest))
       }
 
