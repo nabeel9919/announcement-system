@@ -75,6 +75,10 @@ export default function SettingsPage() {
   const [phraseCard, setPhraseCard] = useState<string>(savedPhrases.card)
   const [phraseName, setPhraseName] = useState<string>(savedPhrases.name)
   const [piperAvailable, setPiperAvailable] = useState<boolean | null>(null)
+  const [piperDownloading, setPiperDownloading] = useState(false)
+  const [piperDownloadStep, setPiperDownloadStep] = useState('')
+  const [piperDownloadPct, setPiperDownloadPct] = useState(0)
+  const [piperDownloadError, setPiperDownloadError] = useState('')
   const [audioSaving, setAudioSaving] = useState(false)
   const [audioSaved, setAudioSaved] = useState(false)
   const [testingAudio, setTestingAudio] = useState(false)
@@ -130,6 +134,11 @@ export default function SettingsPage() {
     WebSpeechProvider.getVoices().then(setVoices)
     // Check Piper availability
     PiperProvider.isAvailable('sw').then(setPiperAvailable)
+    // Subscribe to download progress
+    window.api.piper.onDownloadProgress(({ step, percent }) => {
+      setPiperDownloadStep(step)
+      setPiperDownloadPct(percent)
+    })
     // Load video playlist
     window.api.videos.list().then(setVideos)
     window.api.videos.getDir().then(setVideosDir)
@@ -215,6 +224,23 @@ export default function SettingsPage() {
       : [...windows, data]
     setWindows(updated as ServiceWindow[])
     setWinForm(null)
+  }
+
+  // ── Piper download
+  async function downloadPiper() {
+    setPiperDownloading(true)
+    setPiperDownloadError('')
+    setPiperDownloadStep('Starting…')
+    setPiperDownloadPct(0)
+    const result = await window.api.piper.download('sw')
+    setPiperDownloading(false)
+    if (result.success) {
+      setPiperAvailable(true)
+      setPiperDownloadStep('Ready')
+      setPiperDownloadPct(100)
+    } else {
+      setPiperDownloadError(result.error ?? 'Download failed')
+    }
   }
 
   // ── Audio
@@ -478,9 +504,36 @@ export default function SettingsPage() {
                   </button>
                 </div>
                 {audioProvider === 'piper' && !piperAvailable && (
-                  <p className="text-xs text-amber-400/80 mt-2">
-                    Run <code className="bg-zinc-800 px-1 py-0.5 rounded text-amber-300">node scripts/download-piper.mjs</code> from the project root to download the model (~75 MB).
-                  </p>
+                  <div className="mt-3 p-3 rounded-lg bg-zinc-800/60 border border-zinc-700/50">
+                    {!piperDownloading && piperDownloadPct < 100 && (
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-xs text-zinc-400">Voice model not installed (~75 MB, one-time download)</p>
+                        <button
+                          onClick={downloadPiper}
+                          className="shrink-0 px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors"
+                        >
+                          Download Now
+                        </button>
+                      </div>
+                    )}
+                    {piperDownloading && (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-zinc-300">{piperDownloadStep}</span>
+                          <span className="text-zinc-500">{piperDownloadPct}%</span>
+                        </div>
+                        <div className="w-full h-1.5 rounded-full bg-zinc-700 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-indigo-500 transition-all duration-300"
+                            style={{ width: `${piperDownloadPct}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    {piperDownloadError && (
+                      <p className="text-xs text-red-400 mt-1">{piperDownloadError}</p>
+                    )}
+                  </div>
                 )}
               </div>
 

@@ -146,6 +146,13 @@ const api = {
     /** Synthesize text — returns base64-encoded WAV string */
     synthesize: (text: string, lang?: string): Promise<string> =>
       ipcRenderer.invoke('piper:synthesize', text, lang ?? 'sw'),
+    /** Download Piper binary + voice model — resolves when done */
+    download: (lang?: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke('piper:download', lang ?? 'sw'),
+    /** Subscribe to download progress events */
+    onDownloadProgress: (cb: (info: { step: string; percent: number }) => void) => {
+      ipcRenderer.on('piper:download-progress', (_e, info) => cb(info))
+    },
   },
 
   // ─── Videos ────────────────────────────────────────────────────────────

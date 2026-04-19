@@ -19,12 +19,21 @@ import { app } from 'electron'
 // ── Path resolution ──────────────────────────────────────────────────────────
 
 function getPiperDir(): string {
+  // userData/piper takes priority — allows in-app download without reinstalling
+  const userDataPiper = join(app.getPath('userData'), 'piper')
+  const userBin = join(userDataPiper, process.platform === 'win32' ? 'piper.exe' : 'piper')
+  if (existsSync(userBin)) return userDataPiper
+
   if (app.isPackaged) {
     // Production: electron-builder places extraResources here
     return join(process.resourcesPath, 'piper')
   }
   // Development: resources/ sits next to package.json of this workspace package
   return join(app.getAppPath(), 'resources', 'piper')
+}
+
+export function getPiperUserDataDir(): string {
+  return join(app.getPath('userData'), 'piper')
 }
 
 export function getPiperBin(): string {
