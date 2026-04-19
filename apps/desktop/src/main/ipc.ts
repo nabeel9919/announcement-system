@@ -1,6 +1,7 @@
 import { ipcMain, app, protocol, net } from 'electron'
 import Database from 'better-sqlite3'
 import { createHash } from 'crypto'
+import bcrypt from 'bcryptjs'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { readLocalConfig, writeLocalConfig } from './license'
@@ -11,6 +12,76 @@ import {
   sendDailyReport, sendWeeklyDigest,
 } from './email-reporter'
 import type { UserRole } from '@announcement/shared'
+
+// ─── DB row types ─────────────────────────────────────────────────────────────
+
+interface DbTicket {
+  id: string
+  display_number: string
+  sequence_number: number
+  category_id: string
+  status: 'waiting' | 'called' | 'served' | 'skipped' | 'no_show'
+  created_at: string
+  called_at: string | null
+  served_at: string | null
+  window_id: string | null
+  callee_name: string | null
+  recall_count: number
+  answers: string | null
+}
+
+interface DbCategory {
+  id: string
+  code: string
+  label: string
+  window_ids: string
+  color: string
+  prefix: string
+}
+
+interface DbWindow {
+  id: string
+  number: number
+  label: string
+  operator_name: string | null
+  is_active: 0 | 1
+  current_ticket_id: string | null
+}
+
+interface DbUser {
+  id: string
+  username: string
+  display_name: string
+  password_hash: string
+  role: UserRole
+  window_id: string | null
+  is_active: 0 | 1
+  created_at: string
+  last_login_at: string | null
+}
+
+interface DbFeedbackResponse {
+  id: string
+  submitted_at: string
+  category_id: string | null
+  category_label: string | null
+  answers: string
+}
+
+/** SQLite COUNT(*) result row */
+interface CountRow { c: number }
+/** SQLite AVG() result row */
+interface AvgRow { s: number | null }
+
+interface OpPerfRow {
+  callee_name: string
+  window_id: string | null
+  total_called: number
+  served: number
+  skipped: number
+  no_show: number
+  avg_service_seconds: number | null
+}
 
 let db: Database.Database | null = null
 
@@ -168,9 +239,10 @@ function logAuditEvent(
   categoryId?: string | null,
   notes?: string | null,
 ): void {
-  const windowLabel = windowId
-    ? (db.prepare('SELECT label FROM windows WHERE id = ?').get(windowId) as any)?.label ?? null
-    : null
+  const windowRow = windowId
+    ? db.prepare('SELECT label FROM windows WHERE id = ?').get(windowId) as { label: string } | undefined
+    : undefined
+  const windowLabel = windowRow?.label ?? null
   db.prepare(`
     INSERT INTO audit_log (id, timestamp, event, ticket_id, display_number, window_id, window_label, category_id, notes)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -245,7 +317,7 @@ export function setupIpcHandlers(): void {
 
   // ─── Tickets ─────────────────────────────────────────────────────────────
 
-  function mapTicket(row: any) {
+  function mapTicket(row: DbTicket) {
     return {
       id: row.id,
       displayNumber: row.display_number,
@@ -261,7 +333,7 @@ export function setupIpcHandlers(): void {
     }
   }
 
-  function mapCategory(row: any) {
+  function mapCategory(row: DbCategory) {
     return {
       id: row.id,
       code: row.code,
@@ -272,7 +344,7 @@ export function setupIpcHandlers(): void {
     }
   }
 
-  function mapWindow(row: any) {
+  function mapWindow(row: DbWindow) {
     return {
       id: row.id,
       number: row.number,
@@ -288,7 +360,7 @@ export function setupIpcHandlers(): void {
     const rows = status
       ? db.prepare('SELECT * FROM tickets WHERE status = ? ORDER BY sequence_number ASC').all(status)
       : db.prepare('SELECT * FROM tickets ORDER BY sequence_number ASC').all()
-    return (rows as any[]).map(mapTicket)
+    return (rows as DbTicket[]).map(mapTicket)
   })
 
   ipcMain.handle('tickets:create', (_event, ticket: Record<string, unknown>) => {
@@ -312,24 +384,27 @@ export function setupIpcHandlers(): void {
   ipcMain.handle('tickets:call', (_event, ticketId: string, windowId: string) => {
     const db = getDb()
     const now = new Date().toISOString()
-    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId) as any
-    db.prepare(`
-      UPDATE tickets SET status = 'called', called_at = ?, window_id = ?, recall_count = recall_count + 1
-      WHERE id = ?
-    `).run(now, windowId, ticketId)
-    db.prepare(`UPDATE windows SET current_ticket_id = ? WHERE id = ?`).run(ticketId, windowId)
-    db.prepare(`
-      INSERT INTO call_log (id, ticket_id, window_id, called_at, type)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(crypto.randomUUID(), ticketId, windowId, now, 'initial')
-    logAuditEvent(db, 'ticket_called', ticketId, ticket?.display_number, windowId, ticket?.category_id)
+    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId) as DbTicket | undefined
+    if (!ticket) return { success: false, error: 'Ticket not found' }
+    db.transaction(() => {
+      db.prepare(`
+        UPDATE tickets SET status = 'called', called_at = ?, window_id = ?, recall_count = recall_count + 1
+        WHERE id = ?
+      `).run(now, windowId, ticketId)
+      db.prepare(`UPDATE windows SET current_ticket_id = ? WHERE id = ?`).run(ticketId, windowId)
+      db.prepare(`
+        INSERT INTO call_log (id, ticket_id, window_id, called_at, type)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(crypto.randomUUID(), ticketId, windowId, now, 'initial')
+    })()
+    logAuditEvent(db, 'ticket_called', ticketId, ticket.display_number, windowId, ticket.category_id)
     return { success: true }
   })
 
   ipcMain.handle('tickets:recall', (_event, ticketId: string) => {
     const db = getDb()
     const now = new Date().toISOString()
-    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId) as any
+    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId) as DbTicket | undefined
     if (!ticket) return { success: false }
     db.prepare(`UPDATE tickets SET recall_count = recall_count + 1 WHERE id = ?`).run(ticketId)
     db.prepare(`
@@ -343,20 +418,20 @@ export function setupIpcHandlers(): void {
   ipcMain.handle('tickets:serve', (_event, ticketId: string) => {
     const db = getDb()
     const now = new Date().toISOString()
-    db.prepare(`
-      UPDATE tickets SET status = 'served', served_at = ? WHERE id = ?
-    `).run(now, ticketId)
-    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId) as any
-    if (ticket?.window_id) {
-      db.prepare(`UPDATE windows SET current_ticket_id = NULL WHERE id = ?`).run(ticket.window_id)
-    }
+    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId) as DbTicket | undefined
+    db.transaction(() => {
+      db.prepare(`UPDATE tickets SET status = 'served', served_at = ? WHERE id = ?`).run(now, ticketId)
+      if (ticket?.window_id) {
+        db.prepare(`UPDATE windows SET current_ticket_id = NULL WHERE id = ?`).run(ticket.window_id)
+      }
+    })()
     logAuditEvent(db, 'ticket_served', ticketId, ticket?.display_number, ticket?.window_id, ticket?.category_id)
     return { success: true }
   })
 
   ipcMain.handle('tickets:skip', (_event, ticketId: string) => {
     const db = getDb()
-    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId) as any
+    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId) as DbTicket | undefined
     db.prepare(`UPDATE tickets SET status = 'skipped' WHERE id = ?`).run(ticketId)
     logAuditEvent(db, 'ticket_skipped', ticketId, ticket?.display_number, ticket?.window_id, ticket?.category_id)
     return { success: true }
@@ -364,11 +439,13 @@ export function setupIpcHandlers(): void {
 
   ipcMain.handle('tickets:noShow', (_event, ticketId: string) => {
     const db = getDb()
-    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId) as any
-    db.prepare(`UPDATE tickets SET status = 'no_show' WHERE id = ?`).run(ticketId)
-    if (ticket?.window_id) {
-      db.prepare(`UPDATE windows SET current_ticket_id = NULL WHERE id = ?`).run(ticket.window_id)
-    }
+    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId) as DbTicket | undefined
+    db.transaction(() => {
+      db.prepare(`UPDATE tickets SET status = 'no_show' WHERE id = ?`).run(ticketId)
+      if (ticket?.window_id) {
+        db.prepare(`UPDATE windows SET current_ticket_id = NULL WHERE id = ?`).run(ticket.window_id)
+      }
+    })()
     logAuditEvent(db, 'ticket_no_show', ticketId, ticket?.display_number, ticket?.window_id, ticket?.category_id)
     return { success: true }
   })
@@ -385,8 +462,10 @@ export function setupIpcHandlers(): void {
   ipcMain.handle('tickets:resetDay', () => {
     const db = getDb()
     logAuditEvent(db, 'day_reset')
-    db.prepare(`DELETE FROM tickets`).run()
-    db.prepare(`UPDATE windows SET current_ticket_id = NULL`).run()
+    db.transaction(() => {
+      db.prepare(`DELETE FROM tickets`).run()
+      db.prepare(`UPDATE windows SET current_ticket_id = NULL`).run()
+    })()
     return { success: true }
   })
 
@@ -394,7 +473,7 @@ export function setupIpcHandlers(): void {
 
   ipcMain.handle('categories:list', () => {
     const db = getDb()
-    return (db.prepare('SELECT * FROM categories').all() as any[]).map(mapCategory)
+    return (db.prepare('SELECT * FROM categories').all() as DbCategory[]).map(mapCategory)
   })
 
   ipcMain.handle('categories:delete', (_event, id: string) => {
@@ -426,7 +505,7 @@ export function setupIpcHandlers(): void {
 
   ipcMain.handle('windows:list', () => {
     const db = getDb()
-    return (db.prepare('SELECT * FROM windows ORDER BY number ASC').all() as any[]).map(mapWindow)
+    return (db.prepare('SELECT * FROM windows ORDER BY number ASC').all() as DbWindow[]).map(mapWindow)
   })
 
   ipcMain.handle('windows:upsert', (_event, window: Record<string, unknown>) => {
@@ -451,7 +530,7 @@ export function setupIpcHandlers(): void {
     const db = getDb()
     const today = new Date().toISOString().slice(0, 10)
     const q = (status: string) =>
-      (db.prepare(`SELECT COUNT(*) as c FROM tickets WHERE status = ? AND created_at LIKE ?`).get(status, `${today}%`) as any).c
+      (db.prepare(`SELECT COUNT(*) as c FROM tickets WHERE status = ? AND created_at LIKE ?`).get(status, `${today}%`) as CountRow).c
     return {
       waiting: q('waiting'),
       called: q('called'),
@@ -467,19 +546,19 @@ export function setupIpcHandlers(): void {
 
     // Waiting tickets ahead (all waiting tickets today, filtered by category if given)
     const waitingCount = categoryId
-      ? (db.prepare(`SELECT COUNT(*) as c FROM tickets WHERE status = 'waiting' AND category_id = ? AND created_at LIKE ?`).get(categoryId, `${today}%`) as any).c
-      : (db.prepare(`SELECT COUNT(*) as c FROM tickets WHERE status = 'waiting' AND created_at LIKE ?`).get(`${today}%`) as any).c
+      ? (db.prepare(`SELECT COUNT(*) as c FROM tickets WHERE status = 'waiting' AND category_id = ? AND created_at LIKE ?`).get(categoryId, `${today}%`) as CountRow).c
+      : (db.prepare(`SELECT COUNT(*) as c FROM tickets WHERE status = 'waiting' AND created_at LIKE ?`).get(`${today}%`) as CountRow).c
 
     // Average service time from today's completed tickets (created → served)
     let avgSeconds: number | null = null
     const catAvg = categoryId
-      ? (db.prepare(`SELECT AVG((julianday(served_at) - julianday(created_at)) * 86400) as s FROM tickets WHERE status = 'served' AND category_id = ? AND created_at LIKE ? AND served_at IS NOT NULL`).get(categoryId, `${today}%`) as any)?.s
+      ? (db.prepare(`SELECT AVG((julianday(served_at) - julianday(created_at)) * 86400) as s FROM tickets WHERE status = 'served' AND category_id = ? AND created_at LIKE ? AND served_at IS NOT NULL`).get(categoryId, `${today}%`) as AvgRow | undefined)?.s
       : null
     if (catAvg) {
       avgSeconds = catAvg
     } else {
       // Fall back to overall average across all categories today
-      const overallAvg = (db.prepare(`SELECT AVG((julianday(served_at) - julianday(created_at)) * 86400) as s FROM tickets WHERE status = 'served' AND created_at LIKE ? AND served_at IS NOT NULL`).get(`${today}%`) as any)?.s
+      const overallAvg = (db.prepare(`SELECT AVG((julianday(served_at) - julianday(created_at)) * 86400) as s FROM tickets WHERE status = 'served' AND created_at LIKE ? AND served_at IS NOT NULL`).get(`${today}%`) as AvgRow | undefined)?.s
       avgSeconds = overallAvg ?? null
     }
 
@@ -504,10 +583,25 @@ export function setupIpcHandlers(): void {
   // ─── Users / RBAC ────────────────────────────────────────────────────────
 
   function hashPassword(password: string): string {
-    return createHash('sha256').update(password).digest('hex')
+    return bcrypt.hashSync(password, 12)
   }
 
-  function mapUser(row: any) {
+  /** Verify a password against a stored hash.
+   *  Supports legacy SHA-256 hashes (64 hex chars) and auto-migrates them to bcrypt on success. */
+  function verifyPassword(db: Database.Database, userId: string, password: string, storedHash: string): boolean {
+    const isSha256 = /^[a-f0-9]{64}$/.test(storedHash)
+    if (isSha256) {
+      const matches = createHash('sha256').update(password).digest('hex') === storedHash
+      if (matches) {
+        // Migrate to bcrypt transparently
+        db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(password), userId)
+      }
+      return matches
+    }
+    return bcrypt.compareSync(password, storedHash)
+  }
+
+  function mapUser(row: DbUser) {
     return {
       id: row.id,
       username: row.username,
@@ -522,7 +616,7 @@ export function setupIpcHandlers(): void {
 
   /** Seed a default admin account on first run if no users exist */
   function seedDefaultAdmin(db: Database.Database): void {
-    const count = (db.prepare('SELECT COUNT(*) as c FROM users').get() as any).c
+    const count = (db.prepare('SELECT COUNT(*) as c FROM users').get() as CountRow).c
     if (count === 0) {
       db.prepare(`
         INSERT INTO users (id, username, display_name, password_hash, role, is_active, created_at)
@@ -536,8 +630,8 @@ export function setupIpcHandlers(): void {
   /** Authenticate user — returns user object (without hash) or null */
   ipcMain.handle('users:login', (_event, username: string, password: string) => {
     const db = getDb()
-    const row = db.prepare(`SELECT * FROM users WHERE username = ? AND is_active = 1`).get(username) as any
-    if (!row || row.password_hash !== hashPassword(password)) return null
+    const row = db.prepare(`SELECT * FROM users WHERE username = ? AND is_active = 1`).get(username) as DbUser | undefined
+    if (!row || !verifyPassword(db, row.id, password, row.password_hash)) return null
     db.prepare(`UPDATE users SET last_login_at = ? WHERE id = ?`).run(new Date().toISOString(), row.id)
     logAuditEvent(db, 'user_login', null, null, null, null, `user:${row.username} role:${row.role}`)
     return mapUser(row)
@@ -545,12 +639,12 @@ export function setupIpcHandlers(): void {
 
   ipcMain.handle('users:list', () => {
     const db = getDb()
-    return (db.prepare(`SELECT * FROM users ORDER BY display_name ASC`).all() as any[]).map(mapUser)
+    return (db.prepare(`SELECT * FROM users ORDER BY display_name ASC`).all() as DbUser[]).map(mapUser)
   })
 
   ipcMain.handle('users:upsert', (_event, user: Record<string, unknown>) => {
     const db = getDb()
-    const existing = db.prepare('SELECT id FROM users WHERE id = ?').get(user.id) as any
+    const existing = db.prepare('SELECT id FROM users WHERE id = ?').get(user.id) as { id: string } | undefined
     if (existing) {
       // Update — only update password if provided
       if (user.password) {
@@ -590,9 +684,9 @@ export function setupIpcHandlers(): void {
 
   ipcMain.handle('users:changePassword', (_event, userId: string, oldPassword: string, newPassword: string) => {
     const db = getDb()
-    const row = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as any
+    const row = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as DbUser | undefined
     if (!row) return { success: false, error: 'User not found' }
-    if (row.password_hash !== hashPassword(oldPassword)) return { success: false, error: 'Incorrect current password' }
+    if (!verifyPassword(db, userId, oldPassword, row.password_hash)) return { success: false, error: 'Incorrect current password' }
     db.prepare(`UPDATE users SET password_hash = ? WHERE id = ?`).run(hashPassword(newPassword), userId)
     return { success: true }
   })
@@ -764,9 +858,11 @@ export function setupIpcHandlers(): void {
   /** Delete a kiosk question */
   ipcMain.handle('kiosk:questions.delete', (_event, id: string) => {
     const db = getDb()
-    // Also clear any questions that depend on this one
-    db.prepare(`UPDATE kiosk_questions SET depends_on_question_id = NULL, depends_on_option_id = NULL WHERE depends_on_question_id = ?`).run(id)
-    db.prepare(`DELETE FROM kiosk_questions WHERE id = ?`).run(id)
+    db.transaction(() => {
+      // Also clear any questions that depend on this one
+      db.prepare(`UPDATE kiosk_questions SET depends_on_question_id = NULL, depends_on_option_id = NULL WHERE depends_on_question_id = ?`).run(id)
+      db.prepare(`DELETE FROM kiosk_questions WHERE id = ?`).run(id)
+    })()
     return { success: true }
   })
 
@@ -911,13 +1007,13 @@ export function setupIpcHandlers(): void {
     const db = getDb()
     const safeDays = Math.max(1, Math.min(Number(days) || 30, 365))
     const since = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000).toISOString()
-    const rows = db.prepare(`SELECT * FROM feedback_responses WHERE submitted_at >= ? ORDER BY submitted_at DESC`).all(since) as any[]
+    const rows = db.prepare(`SELECT * FROM feedback_responses WHERE submitted_at >= ? ORDER BY submitted_at DESC`).all(since) as DbFeedbackResponse[]
     return rows.map(r => ({
       id: r.id,
       submittedAt: r.submitted_at,
       categoryId: r.category_id,
       categoryLabel: r.category_label,
-      answers: safeJsonParse(r.answers, [] as any[]),
+      answers: safeJsonParse(r.answers, [] as unknown[]),
     }))
   })
 
@@ -926,7 +1022,7 @@ export function setupIpcHandlers(): void {
     const db = getDb()
     const safeDays = Math.max(1, Math.min(Number(days) || 30, 365))
     const since = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000).toISOString()
-    const rows = db.prepare(`SELECT answers FROM feedback_responses WHERE submitted_at >= ?`).all(since) as any[]
+    const rows = db.prepare(`SELECT answers FROM feedback_responses WHERE submitted_at >= ?`).all(since) as Pick<DbFeedbackResponse, 'answers'>[]
 
     const total = rows.length
     // Aggregate scores per question
@@ -934,7 +1030,7 @@ export function setupIpcHandlers(): void {
     const choiceMap: Record<string, Record<string, number>> = {}
 
     for (const row of rows) {
-      const answers: any[] = safeJsonParse(row.answers, [] as any[])
+      const answers = safeJsonParse(row.answers, [] as Record<string, unknown>[])
       for (const a of answers) {
         if (a.type === 'star' || a.type === 'emoji') {
           if (!scoreMap[a.questionId]) scoreMap[a.questionId] = { sum: 0, count: 0, label: a.question }
@@ -970,7 +1066,7 @@ export function setupIpcHandlers(): void {
       SELECT id, submitted_at, category_id, category_label, answers
       FROM feedback_responses WHERE submitted_at >= ?
       ORDER BY submitted_at DESC
-    `).all(since) as any[]
+    `).all(since) as DbFeedbackResponse[]
 
     // Seed daily buckets so every day in range appears even with 0 responses
     const dailyMap: Record<string, { count: number; scoreSum: number; scoreCount: number }> = {}
@@ -998,7 +1094,7 @@ export function setupIpcHandlers(): void {
       if (!catMap[catKey]) catMap[catKey] = { label: row.category_label ?? 'General', count: 0, scoreSum: 0, scoreCount: 0 }
       catMap[catKey].count++
 
-      const answers: any[] = safeJsonParse(row.answers, [] as any[])
+      const answers = safeJsonParse(row.answers, [] as Record<string, unknown>[])
 
       for (const a of answers) {
         const qId = a.questionId as string
@@ -1131,7 +1227,7 @@ export function setupIpcHandlers(): void {
           WHERE callee_name IS NOT NULL AND created_at LIKE ?
           GROUP BY callee_name, window_id
           ORDER BY served DESC
-        `).all(`${since}%`) as any[]
+        `).all(`${since}%`) as OpPerfRow[]
       : db.prepare(`
           SELECT callee_name, window_id,
             COUNT(*) as total_called,
@@ -1145,7 +1241,7 @@ export function setupIpcHandlers(): void {
           WHERE callee_name IS NOT NULL AND created_at >= ?
           GROUP BY callee_name, window_id
           ORDER BY served DESC
-        `).all(since) as any[]
+        `).all(since) as OpPerfRow[]
 
     return rows.map((r) => ({
       operatorName: r.callee_name,
