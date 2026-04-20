@@ -1,12 +1,12 @@
-import { ipcMain, app, protocol, net } from 'electron'
+import { ipcMain, app, protocol, net, dialog } from 'electron'
 import Database from 'better-sqlite3'
 import { createHash } from 'crypto'
 import bcrypt from 'bcryptjs'
-import { mkdirSync, createWriteStream, existsSync as fsExistsSync, chmodSync, copyFileSync, unlinkSync } from 'fs'
+import { mkdirSync, createWriteStream, existsSync as fsExistsSync, chmodSync, copyFileSync, unlinkSync, readdirSync } from 'fs'
 import { pipeline } from 'stream/promises'
 import { spawnSync } from 'child_process'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { join, basename, extname } from 'path'
 import { pathToFileURL } from 'url'
 import { readLocalConfig, writeLocalConfig } from './license'
 import { isPiperAvailable, synthesizeWithPiper, getPiperBin, getPiperModel, getPiperUserDataDir } from './piper-synth'
@@ -70,6 +70,14 @@ interface DbFeedbackResponse {
   category_id: string | null
   category_label: string | null
   answers: string
+}
+
+interface DbFloorPlan {
+  id: string
+  label: string
+  image_file: string
+  pins: string
+  created_at: string
 }
 
 interface DbHelpItem {
@@ -220,6 +228,14 @@ function initSchema(db: Database.Database): void {
       label TEXT NOT NULL,
       location TEXT,
       is_enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS floor_plans (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      image_file TEXT NOT NULL,
+      pins TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL
     );
 
@@ -1445,6 +1461,64 @@ export function setupIpcHandlers(): void {
     db.transaction(() => { ids.forEach((id, i) => update.run(i, id)) })()
     return { success: true }
   })
+
+  // ── Floor Plans ────────────────────────────────────────────────────────────
+
+  ipcMain.handle('floorPlans:list', () => {
+    const db = getDb()
+    const rows = db.prepare(`SELECT * FROM floor_plans ORDER BY created_at ASC`).all() as DbFloorPlan[]
+    return rows.map((r) => ({
+      id: r.id, label: r.label, imageFileName: r.image_file,
+      pins: safeJsonParse(r.pins, []),
+      createdAt: r.created_at,
+      imageUrl: `local-floor-plan:///${r.image_file}`,
+    }))
+  })
+
+  ipcMain.handle('floorPlans:upsert', (_event, plan: { id: string; label: string; imageFileName: string; pins: unknown[]; createdAt: string }) => {
+    const db = getDb()
+    db.prepare(`
+      INSERT INTO floor_plans (id, label, image_file, pins, created_at)
+      VALUES (@id, @label, @imageFileName, @pins, @createdAt)
+      ON CONFLICT(id) DO UPDATE SET label = excluded.label, pins = excluded.pins
+    `).run({ ...plan, pins: JSON.stringify(plan.pins) })
+    return { success: true }
+  })
+
+  ipcMain.handle('floorPlans:delete', (_event, id: string) => {
+    const db = getDb()
+    const row = db.prepare(`SELECT image_file FROM floor_plans WHERE id = ?`).get(id) as DbFloorPlan | undefined
+    if (row) {
+      const filePath = join(getFloorPlansDir(), row.image_file)
+      if (fsExistsSync(filePath)) { try { unlinkSync(filePath) } catch { /* ignore */ } }
+    }
+    db.prepare(`DELETE FROM floor_plans WHERE id = ?`).run(id)
+    return { success: true }
+  })
+
+  ipcMain.handle('floorPlans:addImage', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Select Floor Plan Image',
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+      properties: ['openFile'],
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    const src = result.filePaths[0]
+    const dir = getFloorPlansDir()
+    let dest = join(dir, basename(src))
+    let counter = 1
+    while (fsExistsSync(dest)) {
+      const ext = extname(basename(src))
+      const base = basename(src, ext)
+      dest = join(dir, `${base}_${counter}${ext}`)
+      counter++
+    }
+    copyFileSync(src, dest)
+    const fileName = basename(dest)
+    return { fileName, imageUrl: `local-floor-plan:///${fileName}` }
+  })
+
+  ipcMain.handle('floorPlans:getDir', () => getFloorPlansDir())
 }
 
 /**
@@ -1456,11 +1530,23 @@ export function registerVideoProtocol() {
   protocol.handle('local-video', (request) => {
     const url = new URL(request.url)
     const dir = getVideosDir()
-    // local-video://videos/filename.mp4  →  hostname="videos"  pathname="/filename.mp4"
-    // local-video:///filename.mp4        →  hostname=""         pathname="/filename.mp4"
-    // Both forms work — just strip the leading slash from pathname
     const filename = decodeURIComponent(url.pathname.replace(/^\//, ''))
     const filePath = join(dir, filename)
+    return net.fetch(pathToFileURL(filePath).href)
+  })
+}
+
+export function getFloorPlansDir(): string {
+  const dir = join(app.getPath('userData'), 'floorPlans')
+  mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+export function registerFloorPlanProtocol() {
+  protocol.handle('local-floor-plan', (request) => {
+    const url = new URL(request.url)
+    const filename = decodeURIComponent(url.pathname.replace(/^\//, ''))
+    const filePath = join(getFloorPlansDir(), filename)
     return net.fetch(pathToFileURL(filePath).href)
   })
 }

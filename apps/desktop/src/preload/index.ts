@@ -245,6 +245,15 @@ const api = {
       ipcRenderer.invoke('kiosk:questions.reorder', ids),
   },
 
+  // ─── Floor Plans ───────────────────────────────────────────────────────
+  floorPlans: {
+    list: (): Promise<unknown[]> => ipcRenderer.invoke('floorPlans:list'),
+    upsert: (plan: unknown): Promise<{ success: boolean }> => ipcRenderer.invoke('floorPlans:upsert', plan),
+    delete: (id: string): Promise<{ success: boolean }> => ipcRenderer.invoke('floorPlans:delete', id),
+    addImage: (): Promise<{ fileName: string; imageUrl: string } | null> => ipcRenderer.invoke('floorPlans:addImage'),
+    getDir: (): Promise<string> => ipcRenderer.invoke('floorPlans:getDir'),
+  },
+
   // ─── Help Items ────────────────────────────────────────────────────────
   help: {
     /** Enabled items sorted by order — for the kiosk Help screen */

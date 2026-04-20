@@ -1,8 +1,8 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useAppStore } from '../../store/app'
 import { cn, generateId, padNumber, formatTime } from '../../lib/utils'
-import type { QueueCategory, KioskQuestion, KioskAnswer, FeedbackQuestion, FeedbackAnswerItem, HelpItem } from '@announcement/shared'
-import { ChevronLeft, ChevronRight, Ticket, Star, MessageSquare, HelpCircle, X } from 'lucide-react'
+import type { QueueCategory, KioskQuestion, KioskAnswer, FeedbackQuestion, FeedbackAnswerItem, HelpItem, FloorPlan, FloorPin } from '@announcement/shared'
+import { ChevronLeft, ChevronRight, Ticket, Star, MessageSquare, HelpCircle, MapPin, Map } from 'lucide-react'
 
 type KioskMode = 'home' | 'ticket' | 'feedback' | 'help'
 type TicketStep = 'select' | 'questions' | 'issuing' | 'done'
@@ -189,6 +189,13 @@ export default function KioskPage() {
   // ── Help state ───────────────────────────────────────────────────────────
   const [helpItems, setHelpItems] = useState<HelpItem[]>([])
   const [expandedHelpId, setExpandedHelpId] = useState<string | null>(null)
+  const [helpTab, setHelpTab] = useState<'faq' | 'map'>('faq')
+
+  // ── Floor plan state ─────────────────────────────────────────────────────
+  type FloorPlanWithUrl = FloorPlan & { imageUrl: string }
+  const [floorPlan, setFloorPlan] = useState<FloorPlanWithUrl | null>(null)
+  const [currentPin, setCurrentPin] = useState<FloorPin | null>(null)
+  const [selectedDestPin, setSelectedDestPin] = useState<FloorPin | null>(null)
 
   // ── Countdown ────────────────────────────────────────────────────────────
   const [countdown, setCountdown] = useState(RESET_SECONDS)
@@ -220,6 +227,11 @@ export default function KioskPage() {
     helpTitle:     sw ? 'Tunaweza Kukusaidia?' : 'How Can We Help?',
     tapToSeeMore:  sw ? 'Gusa swali kuona jibu' : 'Tap a question to see the answer',
     noHelp:        sw ? 'Hakuna msaada uliowekwa.' : 'No help items configured yet.',
+    faqTab:        sw ? 'Maswali' : 'FAQ',
+    mapTab:        sw ? 'Ramani' : 'Map',
+    youAreHere:    sw ? 'Uko Hapa' : 'You Are Here',
+    selectDest:    sw ? 'Gusa mahali unapotaka kwenda' : 'Tap where you want to go',
+    noMap:         sw ? 'Ramani haijaandaliwa.' : 'No map configured for this device.',
   }
 
   // Clock
@@ -232,6 +244,18 @@ export default function KioskPage() {
     window.api.categories.list().then((cats) => setCategories(cats as QueueCategory[]))
     window.api.feedback.listQuestions().then((qs) => setFeedbackQuestions(qs as FeedbackQuestion[]))
     window.api.help.list().then((items) => setHelpItems(items as HelpItem[]))
+    // Load floor plan configured for this device
+    window.api.config.read().then((cfg: any) => {
+      const planId = cfg?.installationConfig?.currentFloorPlanId
+      const pinId = cfg?.installationConfig?.currentPinId
+      if (!planId) return
+      window.api.floorPlans.list().then((plans: any[]) => {
+        const plan = plans.find((p: any) => p.id === planId) as FloorPlanWithUrl | undefined
+        if (!plan) return
+        setFloorPlan(plan)
+        if (pinId) setCurrentPin(plan.pins.find((p: FloorPin) => p.id === pinId) ?? null)
+      })
+    })
   }, [])
 
   function startCountdown(onDone?: () => void) {
@@ -265,6 +289,8 @@ export default function KioskPage() {
     setFeedbackAnswers([])
     setFeedbackText('')
     setExpandedHelpId(null)
+    setHelpTab('faq')
+    setSelectedDestPin(null)
     setCountdown(RESET_SECONDS)
     resetIdleTimer()
   }
@@ -697,50 +723,132 @@ export default function KioskPage() {
         {/* ══ HELP ══════════════════════════════════════════════════════════ */}
         {mode === 'help' && (
           <div className="w-full max-w-2xl flex flex-col h-full">
-            <div className="text-center mb-6 flex-shrink-0">
+            {/* Title */}
+            <div className="text-center mb-5 flex-shrink-0">
               <p className="text-3xl font-bold text-zinc-100 mb-1">{T.helpTitle}</p>
-              <p className="text-zinc-500 text-base">{T.tapToSeeMore}</p>
             </div>
 
-            {helpItems.length === 0 && (
-              <div className="flex flex-col items-center gap-4 text-center flex-1 justify-center">
-                <HelpCircle className="w-16 h-16 text-zinc-700" />
-                <p className="text-zinc-500 text-lg">{T.noHelp}</p>
-              </div>
+            {/* Tabs — only show Map tab if floor plan is configured */}
+            <div className="flex gap-2 mb-5 flex-shrink-0">
+              <button onClick={() => setHelpTab('faq')}
+                className={cn('flex-1 flex items-center justify-center gap-2 rounded-2xl py-3 text-base font-semibold transition-colors',
+                  helpTab === 'faq' ? 'bg-emerald-600 text-white' : 'bg-zinc-800/60 text-zinc-400 hover:text-zinc-200')}>
+                <HelpCircle className="w-5 h-5" /> {T.faqTab}
+              </button>
+              {floorPlan && (
+                <button onClick={() => { setHelpTab('map'); setSelectedDestPin(null) }}
+                  className={cn('flex-1 flex items-center justify-center gap-2 rounded-2xl py-3 text-base font-semibold transition-colors',
+                    helpTab === 'map' ? 'bg-emerald-600 text-white' : 'bg-zinc-800/60 text-zinc-400 hover:text-zinc-200')}>
+                  <Map className="w-5 h-5" /> {T.mapTab}
+                </button>
+              )}
+            </div>
+
+            {/* ─── FAQ tab ─── */}
+            {helpTab === 'faq' && (
+              <>
+                {helpItems.length === 0 && (
+                  <div className="flex flex-col items-center gap-4 text-center flex-1 justify-center">
+                    <HelpCircle className="w-16 h-16 text-zinc-700" />
+                    <p className="text-zinc-500 text-lg">{T.noHelp}</p>
+                  </div>
+                )}
+                {helpItems.length > 0 && (
+                  <div className="flex-1 overflow-y-auto space-y-3 pb-4 pr-1" style={{ scrollbarWidth: 'none' }}>
+                    {Array.from(new Set(helpItems.map((it) => it.category))).map((cat) => (
+                      <div key={cat}>
+                        <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 px-1">{cat}</p>
+                        <div className="space-y-2">
+                          {helpItems.filter((it) => it.category === cat).map((item) => (
+                            <div key={item.id}>
+                              <button onClick={() => setExpandedHelpId(expandedHelpId === item.id ? null : item.id)}
+                                className={cn('w-full rounded-2xl border-2 px-5 py-4 text-left flex items-center gap-4 transition-all duration-200 active:scale-[0.99]',
+                                  expandedHelpId === item.id
+                                    ? 'border-emerald-500/60 bg-emerald-500/10 rounded-b-none border-b-0'
+                                    : 'border-zinc-700/60 bg-zinc-800/30 hover:border-zinc-600 hover:bg-zinc-800/60')}>
+                                <span className="text-2xl flex-shrink-0">{item.icon}</span>
+                                <p className="flex-1 text-base font-semibold text-zinc-100">{item.question}</p>
+                                <ChevronRight className={cn('w-5 h-5 flex-shrink-0 transition-transform duration-200',
+                                  expandedHelpId === item.id ? 'rotate-90 text-emerald-400' : 'text-zinc-600')} />
+                              </button>
+                              {expandedHelpId === item.id && (
+                                <div className="rounded-b-2xl border-2 border-t-0 border-emerald-500/60 bg-emerald-500/5 px-5 py-4">
+                                  <p className="text-base text-zinc-200 leading-relaxed whitespace-pre-line">{item.answer}</p>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
 
-            {helpItems.length > 0 && (
-              <div className="flex-1 overflow-y-auto space-y-3 pb-4 pr-1" style={{ scrollbarWidth: 'none' }}>
-                {/* Group by category */}
-                {Array.from(new Set(helpItems.map((it) => it.category))).map((cat) => (
-                  <div key={cat}>
-                    <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 px-1">{cat}</p>
-                    <div className="space-y-2">
-                      {helpItems.filter((it) => it.category === cat).map((item) => (
-                        <div key={item.id}>
-                          <button
-                            onClick={() => setExpandedHelpId(expandedHelpId === item.id ? null : item.id)}
-                            className={cn(
-                              'w-full rounded-2xl border-2 px-5 py-4 text-left flex items-center gap-4 transition-all duration-200 active:scale-[0.99]',
-                              expandedHelpId === item.id
-                                ? 'border-emerald-500/60 bg-emerald-500/10 rounded-b-none border-b-0'
-                                : 'border-zinc-700/60 bg-zinc-800/30 hover:border-zinc-600 hover:bg-zinc-800/60'
-                            )}>
-                            <span className="text-2xl flex-shrink-0">{item.icon}</span>
-                            <p className="flex-1 text-base font-semibold text-zinc-100">{item.question}</p>
-                            <ChevronRight className={cn('w-5 h-5 flex-shrink-0 transition-transform duration-200',
-                              expandedHelpId === item.id ? 'rotate-90 text-emerald-400' : 'text-zinc-600')} />
-                          </button>
-                          {expandedHelpId === item.id && (
-                            <div className="rounded-b-2xl border-2 border-t-0 border-emerald-500/60 bg-emerald-500/5 px-5 py-4">
-                              <p className="text-base text-zinc-200 leading-relaxed whitespace-pre-line">{item.answer}</p>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
+            {/* ─── Map tab ─── */}
+            {helpTab === 'map' && (
+              <div className="flex-1 flex flex-col gap-4 overflow-hidden">
+                {!floorPlan && (
+                  <div className="flex flex-col items-center gap-4 text-center flex-1 justify-center">
+                    <Map className="w-16 h-16 text-zinc-700" />
+                    <p className="text-zinc-500 text-lg">{T.noMap}</p>
                   </div>
-                ))}
+                )}
+                {floorPlan && (
+                  <>
+                    <p className="text-center text-zinc-500 text-sm flex-shrink-0">{T.selectDest}</p>
+                    {/* Map container */}
+                    <div className="relative flex-1 rounded-2xl overflow-hidden border border-zinc-700 bg-zinc-950 min-h-0">
+                      <img src={floorPlan.imageUrl} alt={floorPlan.label}
+                        className="w-full h-full object-contain" draggable={false} />
+                      {/* SVG overlay for routing line */}
+                      {currentPin && selectedDestPin && (
+                        <svg className="absolute inset-0 w-full h-full pointer-events-none">
+                          <line
+                            x1={`${currentPin.x}%`} y1={`${currentPin.y}%`}
+                            x2={`${selectedDestPin.x}%`} y2={`${selectedDestPin.y}%`}
+                            stroke="#10B981" strokeWidth="3" strokeDasharray="8 4"
+                            strokeLinecap="round"
+                          />
+                          {/* Arrowhead */}
+                          <circle cx={`${selectedDestPin.x}%`} cy={`${selectedDestPin.y}%`} r="6" fill="#10B981" opacity="0.4" />
+                        </svg>
+                      )}
+                      {/* Pins */}
+                      {floorPlan.pins.map((pin) => {
+                        const isHere = currentPin?.id === pin.id
+                        const isDest = selectedDestPin?.id === pin.id
+                        return (
+                          <button key={pin.id}
+                            style={{ left: `${pin.x}%`, top: `${pin.y}%` }}
+                            className="absolute -translate-x-1/2 -translate-y-full active:scale-95 transition-transform"
+                            onClick={() => isHere ? null : setSelectedDestPin(isDest ? null : pin)}>
+                            <div className="flex flex-col items-center gap-0.5">
+                              <div className={cn('text-xs font-bold px-2 py-0.5 rounded-full shadow-lg whitespace-nowrap',
+                                isHere ? 'bg-emerald-500 text-white' : isDest ? 'bg-amber-500 text-white' : 'bg-indigo-500 text-white opacity-80')}>
+                                {isHere ? `📍 ${T.youAreHere}` : pin.label}
+                              </div>
+                              <div className={cn('w-3 h-3 rounded-full border-2 border-white shadow',
+                                isHere ? 'bg-emerald-500' : isDest ? 'bg-amber-500' : 'bg-indigo-500 opacity-80')} />
+                            </div>
+                          </button>
+                        )
+                      })}
+                    </div>
+                    {/* Selected destination card */}
+                    {selectedDestPin && (
+                      <div className="flex-shrink-0 rounded-2xl border border-amber-500/40 bg-amber-500/10 px-5 py-3 flex items-center gap-3">
+                        <MapPin className="w-5 h-5 text-amber-400 flex-shrink-0" />
+                        <div className="flex-1">
+                          <p className="text-sm font-bold text-zinc-100">{selectedDestPin.label}</p>
+                          <p className="text-xs text-zinc-500">{sw ? 'Fuata mstari wa kijani' : 'Follow the green dashed line'}</p>
+                        </div>
+                        <button onClick={() => setSelectedDestPin(null)} className="text-zinc-500 hover:text-zinc-300 transition-colors text-xs">✕</button>
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             )}
 

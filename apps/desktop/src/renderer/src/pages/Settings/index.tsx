@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import { useAppStore } from '../../store/app'
 import { useQueueStore } from '../../store/queue'
 import type { QueueCategory, ServiceWindow } from '@announcement/shared'
@@ -10,12 +10,12 @@ import {
   Film, GripVertical, FolderOpen, Users, Eye, EyeOff, ShieldCheck,
   HelpCircle, ChevronUp, ChevronDown, ToggleLeft, ToggleRight, GitBranch,
   Star, MessageSquare, Tablet, Copy, Check, Mail, Clock, Send, RefreshCw,
-  LifeBuoy
+  LifeBuoy, Map, MapPin, ImagePlus
 } from 'lucide-react'
 import { WebSpeechProvider, PiperProvider, buildAnnouncementText } from '@announcement/audio-engine'
-import type { UserRole, SystemUser, KioskQuestion, FeedbackQuestion, KioskTerminal, HelpItem } from '@announcement/shared'
+import type { UserRole, SystemUser, KioskQuestion, FeedbackQuestion, KioskTerminal, HelpItem, FloorPlan, FloorPin } from '@announcement/shared'
 
-type Tab = 'org' | 'audio' | 'categories' | 'windows' | 'printer' | 'broadcast' | 'server' | 'media' | 'users' | 'kiosk' | 'feedback' | 'terminals' | 'email' | 'help'
+type Tab = 'org' | 'audio' | 'categories' | 'windows' | 'printer' | 'broadcast' | 'server' | 'media' | 'users' | 'kiosk' | 'feedback' | 'terminals' | 'email' | 'help' | 'floorPlans'
 
 const COLORS = [
   '#4F46E5', '#0EA5E9', '#10B981', '#F59E0B',
@@ -387,6 +387,7 @@ export default function SettingsPage() {
     { id: 'kiosk', label: 'Kiosk Flow', icon: HelpCircle },
     { id: 'feedback', label: 'Feedback', icon: Star },
     { id: 'help', label: 'Kiosk Help', icon: LifeBuoy },
+    { id: 'floorPlans', label: 'Floor Plans', icon: Map },
     { id: 'terminals', label: 'Kiosk Tablets', icon: Tablet },
     { id: 'email', label: 'Email Reports', icon: Mail },
     { id: 'printer', label: 'Printer', icon: Printer },
@@ -1142,6 +1143,9 @@ export default function SettingsPage() {
 
         {/* ── Kiosk Help ────────────────────────────────────────────────────── */}
         {tab === 'help' && <HelpTab />}
+
+        {/* ── Floor Plans ───────────────────────────────────────────────────── */}
+        {tab === 'floorPlans' && <FloorPlansTab />}
 
         {/* ── Staff & Roles ─────────────────────────────────────────────────── */}
         {tab === 'users' && <UsersTab />}
@@ -2908,6 +2912,251 @@ function HelpTab() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Floor Plans Tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+
+type FloorPlanWithUrl = FloorPlan & { imageUrl: string }
+
+function FloorPlansTab() {
+  const { config, setConfig } = useAppStore()
+  const [plans, setPlans] = useState<FloorPlanWithUrl[]>([])
+  const [selectedPlan, setSelectedPlan] = useState<FloorPlanWithUrl | null>(null)
+  const [pendingPin, setPendingPin] = useState<{ x: number; y: number } | null>(null)
+  const [pinLabelInput, setPinLabelInput] = useState('')
+  const [editingPin, setEditingPin] = useState<FloorPin | null>(null)
+  const [addingImage, setAddingImage] = useState(false)
+  const imgRef = useRef<HTMLImageElement>(null)
+
+  const currentFloorPlanId: string = (config as any)?.currentFloorPlanId ?? ''
+  const currentPinId: string = (config as any)?.currentPinId ?? ''
+
+  useEffect(() => {
+    window.api.floorPlans.list().then((data) => {
+      const loaded = data as FloorPlanWithUrl[]
+      setPlans(loaded)
+      if (loaded.length > 0) setSelectedPlan(loaded[0])
+    })
+  }, [])
+
+  async function uploadImage() {
+    setAddingImage(true)
+    try {
+      const result = await window.api.floorPlans.addImage()
+      if (!result) return
+      const newPlan: FloorPlanWithUrl = {
+        id: generateId(),
+        label: 'New Floor Plan',
+        imageFileName: result.fileName,
+        imageUrl: result.imageUrl,
+        pins: [],
+        createdAt: new Date().toISOString(),
+      }
+      await window.api.floorPlans.upsert(newPlan)
+      setPlans((prev) => [...prev, newPlan])
+      setSelectedPlan(newPlan)
+    } finally {
+      setAddingImage(false)
+    }
+  }
+
+  async function deletePlan(id: string) {
+    if (!confirm('Delete this floor plan and its image?')) return
+    await window.api.floorPlans.delete(id)
+    const remaining = plans.filter((p) => p.id !== id)
+    setPlans(remaining)
+    setSelectedPlan(remaining[0] ?? null)
+  }
+
+  async function saveLabel(plan: FloorPlanWithUrl, label: string) {
+    const updated = { ...plan, label }
+    await window.api.floorPlans.upsert(updated)
+    setPlans((prev) => prev.map((p) => (p.id === plan.id ? updated : p)))
+    setSelectedPlan(updated)
+  }
+
+  function handleMapClick(e: React.MouseEvent<HTMLDivElement>) {
+    if (!selectedPlan || editingPin) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const x = ((e.clientX - rect.left) / rect.width) * 100
+    const y = ((e.clientY - rect.top) / rect.height) * 100
+    setPendingPin({ x, y })
+    setPinLabelInput('')
+  }
+
+  async function confirmPin() {
+    if (!selectedPlan || !pendingPin || !pinLabelInput.trim()) return
+    const newPin: FloorPin = { id: generateId(), label: pinLabelInput.trim(), x: pendingPin.x, y: pendingPin.y }
+    const updated = { ...selectedPlan, pins: [...selectedPlan.pins, newPin] }
+    await window.api.floorPlans.upsert(updated)
+    setPlans((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
+    setSelectedPlan(updated)
+    setPendingPin(null)
+    setPinLabelInput('')
+  }
+
+  async function deletePin(pinId: string) {
+    if (!selectedPlan) return
+    const updated = { ...selectedPlan, pins: selectedPlan.pins.filter((p) => p.id !== pinId) }
+    await window.api.floorPlans.upsert(updated)
+    setPlans((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
+    setSelectedPlan(updated)
+    if (currentPinId === pinId) saveDeviceLocation('', '')
+  }
+
+  async function saveDeviceLocation(pinId: string, planId: string) {
+    const updated = { ...(config as any), currentFloorPlanId: planId, currentPinId: pinId }
+    await window.api.config.write({ isSetupComplete: true, installationConfig: updated })
+    setConfig(updated)
+  }
+
+  return (
+    <div className="max-w-4xl space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-zinc-100">Floor Plans</h1>
+          <p className="text-sm text-zinc-500 mt-1">Upload a facility map, place named pins, then set where this device is located.</p>
+        </div>
+        <button onClick={uploadImage} disabled={addingImage}
+          className="flex items-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-500 disabled:opacity-50 px-4 py-2 text-sm font-semibold text-white transition-colors">
+          {addingImage ? <Loader2 className="w-4 h-4 animate-spin" /> : <ImagePlus className="w-4 h-4" />}
+          Upload Map
+        </button>
+      </div>
+
+      {plans.length === 0 && (
+        <div className="rounded-xl border border-dashed border-zinc-700 p-12 text-center">
+          <Map className="w-10 h-10 text-zinc-600 mx-auto mb-3" />
+          <p className="text-zinc-500 text-sm mb-4">No floor plans yet. Upload a photo or scan of your facility map.</p>
+          <button onClick={uploadImage} disabled={addingImage}
+            className="inline-flex items-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-500 px-4 py-2 text-sm font-semibold text-white transition-colors">
+            <ImagePlus className="w-4 h-4" /> Upload Map Image
+          </button>
+        </div>
+      )}
+
+      {plans.length > 0 && (
+        <div className="grid grid-cols-[200px_1fr] gap-6">
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-zinc-500 uppercase tracking-widest mb-3">Floor Plans</p>
+            {plans.map((plan) => (
+              <button key={plan.id} onClick={() => { setSelectedPlan(plan); setPendingPin(null); setEditingPin(null) }}
+                className={cn('w-full rounded-xl border px-3 py-2.5 text-left text-sm transition-colors',
+                  selectedPlan?.id === plan.id
+                    ? 'border-primary-500/60 bg-primary-600/10 text-primary-300'
+                    : 'border-zinc-700 bg-zinc-800/30 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200')}>
+                <p className="font-medium truncate">{plan.label}</p>
+                <p className="text-xs text-zinc-600 mt-0.5">{plan.pins.length} pin{plan.pins.length !== 1 ? 's' : ''}</p>
+              </button>
+            ))}
+          </div>
+
+          {selectedPlan && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <input key={selectedPlan.id} defaultValue={selectedPlan.label}
+                  onBlur={(e) => { if (e.target.value.trim() && e.target.value !== selectedPlan.label) saveLabel(selectedPlan, e.target.value.trim()) }}
+                  className="flex-1 rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-primary-500" />
+                <button onClick={() => deletePlan(selectedPlan.id)}
+                  className="flex items-center gap-1.5 rounded-lg border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 px-3 py-2 text-xs text-red-400 transition-colors">
+                  <Trash2 className="w-3.5 h-3.5" /> Delete
+                </button>
+              </div>
+
+              <div className="rounded-xl border border-zinc-700 overflow-hidden bg-zinc-900">
+                <p className="text-xs text-zinc-500 px-4 py-2 border-b border-zinc-800">
+                  {pendingPin ? '📍 Type a name for this pin below' : 'Click map to place a pin · Click a pin → "Set as Here" or delete'}
+                </p>
+                <div className="relative cursor-crosshair" onClick={handleMapClick}>
+                  <img ref={imgRef} src={selectedPlan.imageUrl} alt={selectedPlan.label}
+                    className="w-full h-auto max-h-[420px] object-contain bg-zinc-950" draggable={false} />
+                  {selectedPlan.pins.map((pin) => (
+                    <div key={pin.id} style={{ left: `${pin.x}%`, top: `${pin.y}%` }}
+                      className="absolute -translate-x-1/2 -translate-y-full"
+                      onClick={(e) => { e.stopPropagation(); setEditingPin(editingPin?.id === pin.id ? null : pin); setPendingPin(null) }}>
+                      <div className="flex flex-col items-center gap-0.5 cursor-pointer">
+                        <div className={cn('text-xs font-bold px-2 py-0.5 rounded-full shadow-lg whitespace-nowrap',
+                          currentPinId === pin.id && currentFloorPlanId === selectedPlan.id ? 'bg-emerald-500 text-white' : 'bg-indigo-500 text-white')}>
+                          {pin.label}
+                        </div>
+                        <div className={cn('w-3 h-3 rounded-full border-2 border-white shadow',
+                          currentPinId === pin.id && currentFloorPlanId === selectedPlan.id ? 'bg-emerald-500' : 'bg-indigo-500')} />
+                      </div>
+                      {editingPin?.id === pin.id && (
+                        <div className="absolute left-1/2 -translate-x-1/2 mt-1 z-10 bg-zinc-800 border border-zinc-600 rounded-lg shadow-xl p-2 flex gap-1 whitespace-nowrap"
+                          onClick={(e) => e.stopPropagation()}>
+                          <button onClick={() => { saveDeviceLocation(pin.id, selectedPlan.id); setEditingPin(null) }}
+                            className="text-xs rounded px-2 py-1 bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/40 transition-colors">
+                            📍 Set as Here
+                          </button>
+                          <button onClick={() => { deletePin(pin.id); setEditingPin(null) }}
+                            className="text-xs rounded px-2 py-1 bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors">
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {pendingPin && (
+                    <div style={{ left: `${pendingPin.x}%`, top: `${pendingPin.y}%` }}
+                      className="absolute -translate-x-1/2 -translate-y-full pointer-events-none">
+                      <div className="flex flex-col items-center gap-0.5">
+                        <div className="text-xs font-bold px-2 py-0.5 rounded-full bg-amber-500 text-white shadow-lg animate-pulse">?</div>
+                        <div className="w-3 h-3 rounded-full bg-amber-500 border-2 border-white shadow animate-pulse" />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {pendingPin && (
+                <div className="flex items-center gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3">
+                  <MapPin className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                  <input value={pinLabelInput} onChange={(e) => setPinLabelInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') confirmPin(); if (e.key === 'Escape') { setPendingPin(null); setPinLabelInput('') } }}
+                    autoFocus placeholder="Pin name (e.g. Laboratory, Reception, Ward 3)…"
+                    className="flex-1 bg-transparent text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none" />
+                  <button onClick={confirmPin} disabled={!pinLabelInput.trim()}
+                    className="rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-40 px-3 py-1.5 text-xs font-semibold text-white transition-colors">
+                    Add Pin
+                  </button>
+                  <button onClick={() => { setPendingPin(null); setPinLabelInput('') }}
+                    className="text-zinc-500 hover:text-zinc-300 transition-colors">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
+              {selectedPlan.pins.length > 0 && (
+                <div className="rounded-xl border border-zinc-700/60 bg-zinc-900/30 p-4 space-y-2">
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="text-xs font-semibold text-zinc-400 uppercase tracking-widest">Pins</p>
+                    <p className="text-xs text-zinc-600">Click a pin on the map → "Set as Here"</p>
+                  </div>
+                  {selectedPlan.pins.map((pin) => (
+                    <div key={pin.id} className="flex items-center gap-3 rounded-lg px-3 py-2 bg-zinc-800/40">
+                      <div className={cn('w-2.5 h-2.5 rounded-full flex-shrink-0',
+                        currentPinId === pin.id && currentFloorPlanId === selectedPlan.id ? 'bg-emerald-400' : 'bg-indigo-400')} />
+                      <span className="flex-1 text-sm text-zinc-200">{pin.label}</span>
+                      {currentPinId === pin.id && currentFloorPlanId === selectedPlan.id && (
+                        <span className="text-xs font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full">YOU ARE HERE</span>
+                      )}
+                      <button onClick={() => deletePin(pin.id)} className="text-zinc-600 hover:text-red-400 transition-colors">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

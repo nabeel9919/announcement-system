@@ -3,7 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { createOperatorWindow, createDisplayWindow, createKioskWindow, getScreenList } from './windows'
-import { setupIpcHandlers, getDb, registerVideoProtocol } from './ipc'
+import { setupIpcHandlers, getDb, registerVideoProtocol, registerFloorPlanProtocol } from './ipc'
 import { setupPrintHandlers } from './print'
 import { checkLicense } from './license'
 import { LanServer } from './lan-server'
@@ -13,6 +13,7 @@ import { scheduleEmailReports } from './email-reporter'
 // Register custom scheme before app is ready (required by Electron)
 protocol.registerSchemesAsPrivileged([
   { scheme: 'local-video', privileges: { secure: true, supportFetchAPI: true, stream: true } },
+  { scheme: 'local-floor-plan', privileges: { secure: true, supportFetchAPI: true, stream: true } },
 ])
 
 let operatorWindow: BrowserWindow | null = null
@@ -42,8 +43,9 @@ app.whenReady().then(async () => {
   // Schedule automated email reports (daily + weekly digest)
   scheduleEmailReports(() => getDb())
 
-  // Register local-video:// protocol for serving userData video files
+  // Register local-video:// and local-floor-plan:// protocols for serving userData files
   registerVideoProtocol()
+  registerFloorPlanProtocol()
 
   // Create operator window
   operatorWindow = createOperatorWindow()

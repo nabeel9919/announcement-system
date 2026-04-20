@@ -33,6 +33,24 @@ export interface KioskTerminal {
   createdAt: string
 }
 
+export interface FloorPin {
+  id: string
+  label: string
+  /** Percentage from left edge of the image (0–100) */
+  x: number
+  /** Percentage from top edge of the image (0–100) */
+  y: number
+}
+
+export interface FloorPlan {
+  id: string
+  label: string
+  /** Filename stored in userData/floorPlans/ */
+  imageFileName: string
+  pins: FloorPin[]
+  createdAt: string
+}
+
 export interface HelpItem {
   id: string
   /** The question / topic shown on the card */
