@@ -245,6 +245,17 @@ const api = {
       ipcRenderer.invoke('kiosk:questions.reorder', ids),
   },
 
+  // ─── Help Items ────────────────────────────────────────────────────────
+  help: {
+    /** Enabled items sorted by order — for the kiosk Help screen */
+    list: (): Promise<unknown[]> => ipcRenderer.invoke('help:list'),
+    /** All items including disabled — for the Settings editor */
+    listAll: (): Promise<unknown[]> => ipcRenderer.invoke('help:listAll'),
+    upsert: (item: unknown): Promise<{ success: boolean }> => ipcRenderer.invoke('help:upsert', item),
+    delete: (id: string): Promise<{ success: boolean }> => ipcRenderer.invoke('help:delete', id),
+    reorder: (ids: string[]): Promise<{ success: boolean }> => ipcRenderer.invoke('help:reorder', ids),
+  },
+
   // ─── Shell ─────────────────────────────────────────────────────────────
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
 }

@@ -33,6 +33,21 @@ export interface KioskTerminal {
   createdAt: string
 }
 
+export interface HelpItem {
+  id: string
+  /** The question / topic shown on the card */
+  question: string
+  /** The answer / directions shown when the card is tapped */
+  answer: string
+  /** Grouping label shown as a section header, e.g. "Navigation", "Services" */
+  category: string
+  /** Emoji icon displayed on the card */
+  icon: string
+  orderIndex: number
+  isEnabled: boolean
+  createdAt: string
+}
+
 export interface KioskAnswer {
   questionId: string
   /** Full question text (for printing) */

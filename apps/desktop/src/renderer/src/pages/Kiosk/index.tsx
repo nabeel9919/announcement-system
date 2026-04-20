@@ -1,10 +1,10 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useAppStore } from '../../store/app'
 import { cn, generateId, padNumber, formatTime } from '../../lib/utils'
-import type { QueueCategory, KioskQuestion, KioskAnswer, FeedbackQuestion, FeedbackAnswerItem } from '@announcement/shared'
-import { ChevronLeft, ChevronRight, Ticket, Star, MessageSquare } from 'lucide-react'
+import type { QueueCategory, KioskQuestion, KioskAnswer, FeedbackQuestion, FeedbackAnswerItem, HelpItem } from '@announcement/shared'
+import { ChevronLeft, ChevronRight, Ticket, Star, MessageSquare, HelpCircle, X } from 'lucide-react'
 
-type KioskMode = 'home' | 'ticket' | 'feedback'
+type KioskMode = 'home' | 'ticket' | 'feedback' | 'help'
 type TicketStep = 'select' | 'questions' | 'issuing' | 'done'
 type FeedbackStep = 'questions' | 'thankyou'
 
@@ -186,6 +186,10 @@ export default function KioskPage() {
   const [feedbackAnswers, setFeedbackAnswers] = useState<FeedbackAnswerItem[]>([])
   const [feedbackText, setFeedbackText] = useState('')
 
+  // ── Help state ───────────────────────────────────────────────────────────
+  const [helpItems, setHelpItems] = useState<HelpItem[]>([])
+  const [expandedHelpId, setExpandedHelpId] = useState<string | null>(null)
+
   // ── Countdown ────────────────────────────────────────────────────────────
   const [countdown, setCountdown] = useState(RESET_SECONDS)
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -211,6 +215,11 @@ export default function KioskPage() {
     typeAnswer:    sw ? 'Andika jibu lako...' : 'Type your answer...',
     thankyou:      sw ? 'Asante!' : 'Thank you!',
     feedbackSent:  sw ? 'Maoni yako yamepokelewa.' : 'Your feedback has been received.',
+    help:          sw ? 'Msaada' : 'Help',
+    helpDesc:      sw ? 'Maswali ya kawaida' : 'Common questions & directions',
+    helpTitle:     sw ? 'Tunaweza Kukusaidia?' : 'How Can We Help?',
+    tapToSeeMore:  sw ? 'Gusa swali kuona jibu' : 'Tap a question to see the answer',
+    noHelp:        sw ? 'Hakuna msaada uliowekwa.' : 'No help items configured yet.',
   }
 
   // Clock
@@ -222,6 +231,7 @@ export default function KioskPage() {
   useEffect(() => {
     window.api.categories.list().then((cats) => setCategories(cats as QueueCategory[]))
     window.api.feedback.listQuestions().then((qs) => setFeedbackQuestions(qs as FeedbackQuestion[]))
+    window.api.help.list().then((items) => setHelpItems(items as HelpItem[]))
   }, [])
 
   function startCountdown(onDone?: () => void) {
@@ -254,6 +264,7 @@ export default function KioskPage() {
     setFeedbackIndex(0)
     setFeedbackAnswers([])
     setFeedbackText('')
+    setExpandedHelpId(null)
     setCountdown(RESET_SECONDS)
     resetIdleTimer()
   }
@@ -434,6 +445,17 @@ export default function KioskPage() {
                 </div>
               </button>
             </div>
+            {/* Help button — full width below */}
+            <button onClick={() => { setExpandedHelpId(null); setMode('help') }}
+              className="group w-full rounded-3xl border-2 border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 hover:border-emerald-500/70 active:scale-95 transition-all duration-200 px-8 py-5 flex items-center gap-5">
+              <div className="w-14 h-14 rounded-2xl bg-emerald-600 flex items-center justify-center shadow-lg shadow-emerald-600/30 group-hover:shadow-emerald-600/50 transition-shadow flex-shrink-0">
+                <HelpCircle className="w-7 h-7 text-white" />
+              </div>
+              <div className="text-left">
+                <p className="text-lg font-bold text-zinc-100">{T.help}</p>
+                <p className="text-sm text-zinc-500 mt-0.5">{T.helpDesc}</p>
+              </div>
+            </button>
           </div>
         )}
 
@@ -669,6 +691,62 @@ export default function KioskPage() {
               </div>
               <p className="text-xs text-zinc-600">{T.resetting} {countdown}s</p>
             </div>
+          </div>
+        )}
+
+        {/* ══ HELP ══════════════════════════════════════════════════════════ */}
+        {mode === 'help' && (
+          <div className="w-full max-w-2xl flex flex-col h-full">
+            <div className="text-center mb-6 flex-shrink-0">
+              <p className="text-3xl font-bold text-zinc-100 mb-1">{T.helpTitle}</p>
+              <p className="text-zinc-500 text-base">{T.tapToSeeMore}</p>
+            </div>
+
+            {helpItems.length === 0 && (
+              <div className="flex flex-col items-center gap-4 text-center flex-1 justify-center">
+                <HelpCircle className="w-16 h-16 text-zinc-700" />
+                <p className="text-zinc-500 text-lg">{T.noHelp}</p>
+              </div>
+            )}
+
+            {helpItems.length > 0 && (
+              <div className="flex-1 overflow-y-auto space-y-3 pb-4 pr-1" style={{ scrollbarWidth: 'none' }}>
+                {/* Group by category */}
+                {Array.from(new Set(helpItems.map((it) => it.category))).map((cat) => (
+                  <div key={cat}>
+                    <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 px-1">{cat}</p>
+                    <div className="space-y-2">
+                      {helpItems.filter((it) => it.category === cat).map((item) => (
+                        <div key={item.id}>
+                          <button
+                            onClick={() => setExpandedHelpId(expandedHelpId === item.id ? null : item.id)}
+                            className={cn(
+                              'w-full rounded-2xl border-2 px-5 py-4 text-left flex items-center gap-4 transition-all duration-200 active:scale-[0.99]',
+                              expandedHelpId === item.id
+                                ? 'border-emerald-500/60 bg-emerald-500/10 rounded-b-none border-b-0'
+                                : 'border-zinc-700/60 bg-zinc-800/30 hover:border-zinc-600 hover:bg-zinc-800/60'
+                            )}>
+                            <span className="text-2xl flex-shrink-0">{item.icon}</span>
+                            <p className="flex-1 text-base font-semibold text-zinc-100">{item.question}</p>
+                            <ChevronRight className={cn('w-5 h-5 flex-shrink-0 transition-transform duration-200',
+                              expandedHelpId === item.id ? 'rotate-90 text-emerald-400' : 'text-zinc-600')} />
+                          </button>
+                          {expandedHelpId === item.id && (
+                            <div className="rounded-b-2xl border-2 border-t-0 border-emerald-500/60 bg-emerald-500/5 px-5 py-4">
+                              <p className="text-base text-zinc-200 leading-relaxed whitespace-pre-line">{item.answer}</p>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <button onClick={resetAll} className="flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-300 transition-colors mx-auto mt-4 flex-shrink-0">
+              <ChevronLeft className="w-4 h-4" /> {T.back}
+            </button>
           </div>
         )}
 

@@ -9,12 +9,13 @@ import {
   Building2, Monitor, Layers, Printer, Volume2, AlertTriangle, Globe, Music2,
   Film, GripVertical, FolderOpen, Users, Eye, EyeOff, ShieldCheck,
   HelpCircle, ChevronUp, ChevronDown, ToggleLeft, ToggleRight, GitBranch,
-  Star, MessageSquare, Tablet, Copy, Check, Mail, Clock, Send, RefreshCw
+  Star, MessageSquare, Tablet, Copy, Check, Mail, Clock, Send, RefreshCw,
+  LifeBuoy
 } from 'lucide-react'
 import { WebSpeechProvider, PiperProvider, buildAnnouncementText } from '@announcement/audio-engine'
-import type { UserRole, SystemUser, KioskQuestion, FeedbackQuestion, KioskTerminal } from '@announcement/shared'
+import type { UserRole, SystemUser, KioskQuestion, FeedbackQuestion, KioskTerminal, HelpItem } from '@announcement/shared'
 
-type Tab = 'org' | 'audio' | 'categories' | 'windows' | 'printer' | 'broadcast' | 'server' | 'media' | 'users' | 'kiosk' | 'feedback' | 'terminals' | 'email'
+type Tab = 'org' | 'audio' | 'categories' | 'windows' | 'printer' | 'broadcast' | 'server' | 'media' | 'users' | 'kiosk' | 'feedback' | 'terminals' | 'email' | 'help'
 
 const COLORS = [
   '#4F46E5', '#0EA5E9', '#10B981', '#F59E0B',
@@ -385,6 +386,7 @@ export default function SettingsPage() {
     { id: 'users', label: 'Staff & Roles', icon: Users },
     { id: 'kiosk', label: 'Kiosk Flow', icon: HelpCircle },
     { id: 'feedback', label: 'Feedback', icon: Star },
+    { id: 'help', label: 'Kiosk Help', icon: LifeBuoy },
     { id: 'terminals', label: 'Kiosk Tablets', icon: Tablet },
     { id: 'email', label: 'Email Reports', icon: Mail },
     { id: 'printer', label: 'Printer', icon: Printer },
@@ -1137,6 +1139,9 @@ export default function SettingsPage() {
 
         {/* ── Feedback ──────────────────────────────────────────────────────── */}
         {tab === 'feedback' && <FeedbackTab />}
+
+        {/* ── Kiosk Help ────────────────────────────────────────────────────── */}
+        {tab === 'help' && <HelpTab />}
 
         {/* ── Staff & Roles ─────────────────────────────────────────────────── */}
         {tab === 'users' && <UsersTab />}
@@ -2679,6 +2684,232 @@ function EmailTab() {
           <span className="text-zinc-400">Google Account → Security → 2-Step Verification → App passwords</span>.
         </p>
       </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Kiosk Help Tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+const HELP_ICONS = ['❓', '🗺️', '🚪', '🏥', '💊', '🩺', '🧪', '💉', '🏦', '🎫', '🚻', '🛗', '📋', '🔍', '📞', '🅿️', '☕', '🍽️', '💻', '🔒']
+const HELP_CATEGORIES = ['Navigation', 'Services', 'First Time', 'Facilities', 'Documents', 'General']
+
+const emptyHelpItem = (): HelpItem => ({
+  id: generateId(),
+  question: '',
+  answer: '',
+  category: 'General',
+  icon: '❓',
+  orderIndex: 0,
+  isEnabled: true,
+  createdAt: new Date().toISOString(),
+})
+
+function HelpTab() {
+  const [items, setItems] = useState<HelpItem[]>([])
+  const [editing, setEditing] = useState<HelpItem | null>(null)
+  const [formError, setFormError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    window.api.help.listAll().then((data) => setItems(data as HelpItem[]))
+  }, [])
+
+  function openNew() {
+    setFormError('')
+    setEditing({ ...emptyHelpItem(), orderIndex: items.length })
+  }
+
+  function openEdit(item: HelpItem) {
+    setFormError('')
+    setEditing({ ...item })
+  }
+
+  async function save() {
+    if (!editing) return
+    if (!editing.question.trim()) { setFormError('Question is required'); return }
+    if (!editing.answer.trim()) { setFormError('Answer is required'); return }
+    setSaving(true)
+    try {
+      await window.api.help.upsert(editing)
+      const updated = items.some((i) => i.id === editing.id)
+        ? items.map((i) => (i.id === editing.id ? editing : i))
+        : [...items, editing]
+      setItems(updated)
+      setEditing(null)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function toggle(item: HelpItem) {
+    const updated = { ...item, isEnabled: !item.isEnabled }
+    await window.api.help.upsert(updated)
+    setItems(items.map((i) => (i.id === item.id ? updated : i)))
+  }
+
+  async function remove(id: string) {
+    if (!confirm('Delete this help item?')) return
+    await window.api.help.delete(id)
+    setItems(items.filter((i) => i.id !== id))
+  }
+
+  async function move(index: number, dir: -1 | 1) {
+    const newItems = [...items]
+    const swap = index + dir
+    if (swap < 0 || swap >= newItems.length) return
+    ;[newItems[index], newItems[swap]] = [newItems[swap], newItems[index]]
+    const reindexed = newItems.map((it, i) => ({ ...it, orderIndex: i }))
+    setItems(reindexed)
+    await window.api.help.reorder(reindexed.map((it) => it.id))
+  }
+
+  return (
+    <div className="max-w-2xl space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-zinc-100">Kiosk Help</h1>
+          <p className="text-sm text-zinc-500 mt-1">FAQ cards shown on the kiosk Help screen. Customers tap a question to see the answer.</p>
+        </div>
+        <button onClick={openNew}
+          className="flex items-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-500 px-4 py-2 text-sm font-semibold text-white transition-colors">
+          <Plus className="w-4 h-4" /> Add Item
+        </button>
+      </div>
+
+      {/* Item list */}
+      {items.length === 0 && (
+        <div className="rounded-xl border border-dashed border-zinc-700 p-10 text-center">
+          <LifeBuoy className="w-8 h-8 text-zinc-600 mx-auto mb-3" />
+          <p className="text-sm text-zinc-500">No help items yet. Add your first FAQ card above.</p>
+        </div>
+      )}
+
+      <div className="space-y-2">
+        {items.map((item, idx) => (
+          <div key={item.id}
+            className={cn('flex items-center gap-3 rounded-xl border px-4 py-3 transition-colors',
+              item.isEnabled ? 'border-zinc-700/60 bg-zinc-800/30' : 'border-zinc-800 bg-zinc-900/30 opacity-50')}>
+            <span className="text-2xl flex-shrink-0">{item.icon}</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-zinc-100 truncate">{item.question}</p>
+              <p className="text-xs text-zinc-500 truncate mt-0.5">{item.category} · {item.answer.slice(0, 60)}{item.answer.length > 60 ? '…' : ''}</p>
+            </div>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              <button onClick={() => move(idx, -1)} disabled={idx === 0}
+                className="p-1.5 rounded-lg hover:bg-zinc-700 text-zinc-500 disabled:opacity-20 transition-colors">
+                <ChevronUp className="w-3.5 h-3.5" />
+              </button>
+              <button onClick={() => move(idx, 1)} disabled={idx === items.length - 1}
+                className="p-1.5 rounded-lg hover:bg-zinc-700 text-zinc-500 disabled:opacity-20 transition-colors">
+                <ChevronDown className="w-3.5 h-3.5" />
+              </button>
+              <button onClick={() => toggle(item)}
+                className="p-1.5 rounded-lg hover:bg-zinc-700 transition-colors">
+                {item.isEnabled
+                  ? <ToggleRight className="w-4 h-4 text-emerald-400" />
+                  : <ToggleLeft className="w-4 h-4 text-zinc-600" />}
+              </button>
+              <button onClick={() => openEdit(item)}
+                className="p-1.5 rounded-lg hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors">
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+              <button onClick={() => remove(item.id)}
+                className="p-1.5 rounded-lg hover:bg-red-500/20 text-zinc-500 hover:text-red-400 transition-colors">
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Edit / Add drawer */}
+      {editing && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) setEditing(null) }}>
+          <div className="w-full max-w-lg rounded-t-2xl border border-zinc-700 bg-zinc-900 p-6 space-y-4"
+            style={{ maxHeight: '90vh', overflowY: 'auto' }}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-bold text-zinc-100">{items.some((i) => i.id === editing.id) ? 'Edit Help Item' : 'New Help Item'}</h2>
+              <button onClick={() => setEditing(null)} className="p-1 rounded-lg hover:bg-zinc-800 text-zinc-400"><X className="w-4 h-4" /></button>
+            </div>
+
+            {/* Icon picker */}
+            <div>
+              <label className="block text-xs font-medium text-zinc-400 mb-2">Icon</label>
+              <div className="flex flex-wrap gap-2">
+                {HELP_ICONS.map((ic) => (
+                  <button key={ic} onClick={() => setEditing({ ...editing, icon: ic })}
+                    className={cn('w-9 h-9 rounded-lg text-lg flex items-center justify-center transition-colors',
+                      editing.icon === ic ? 'bg-primary-600/30 ring-2 ring-primary-500' : 'bg-zinc-800 hover:bg-zinc-700')}>
+                    {ic}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Category */}
+            <div>
+              <label className="block text-xs font-medium text-zinc-400 mb-1.5">Category</label>
+              <div className="flex flex-wrap gap-2 mb-2">
+                {HELP_CATEGORIES.map((cat) => (
+                  <button key={cat} onClick={() => setEditing({ ...editing, category: cat })}
+                    className={cn('rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+                      editing.category === cat
+                        ? 'border-primary-500 bg-primary-600/20 text-primary-300'
+                        : 'border-zinc-700 text-zinc-400 hover:border-zinc-600')}>
+                    {cat}
+                  </button>
+                ))}
+              </div>
+              <input
+                value={editing.category}
+                onChange={(e) => setEditing({ ...editing, category: e.target.value })}
+                placeholder="Or type a custom category…"
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-primary-500"
+              />
+            </div>
+
+            {/* Question */}
+            <div>
+              <label className="block text-xs font-medium text-zinc-400 mb-1.5">Question / Topic</label>
+              <input
+                value={editing.question}
+                onChange={(e) => setEditing({ ...editing, question: e.target.value })}
+                placeholder="e.g. Where is the laboratory?"
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-primary-500"
+              />
+            </div>
+
+            {/* Answer */}
+            <div>
+              <label className="block text-xs font-medium text-zinc-400 mb-1.5">Answer / Directions</label>
+              <textarea
+                value={editing.answer}
+                onChange={(e) => setEditing({ ...editing, answer: e.target.value })}
+                rows={4}
+                placeholder="e.g. The laboratory is on the 2nd floor, turn left from the elevator. Look for the blue sign."
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-primary-500 resize-none"
+              />
+            </div>
+
+            {formError && <p className="text-xs text-red-400">{formError}</p>}
+
+            <div className="flex gap-3 pt-1">
+              <button onClick={save} disabled={saving}
+                className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-500 disabled:opacity-50 py-2.5 text-sm font-semibold text-white transition-colors">
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                Save
+              </button>
+              <button onClick={() => setEditing(null)}
+                className="px-4 rounded-lg border border-zinc-700 bg-zinc-800/50 hover:bg-zinc-800 text-sm text-zinc-300 transition-colors">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

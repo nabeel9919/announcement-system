@@ -72,6 +72,17 @@ interface DbFeedbackResponse {
   answers: string
 }
 
+interface DbHelpItem {
+  id: string
+  question: string
+  answer: string
+  category: string
+  icon: string
+  order_index: number
+  is_enabled: number
+  created_at: string
+}
+
 /** SQLite COUNT(*) result row */
 interface CountRow { c: number }
 /** SQLite AVG() result row */
@@ -208,6 +219,17 @@ function initSchema(db: Database.Database): void {
       number INTEGER NOT NULL,
       label TEXT NOT NULL,
       location TEXT,
+      is_enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS help_items (
+      id TEXT PRIMARY KEY,
+      question TEXT NOT NULL,
+      answer TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT '',
+      icon TEXT NOT NULL DEFAULT '❓',
+      order_index INTEGER NOT NULL DEFAULT 0,
       is_enabled INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL
     );
@@ -1375,6 +1397,54 @@ export function setupIpcHandlers(): void {
   ipcMain.handle('email:sendDailyNow', async () => sendDailyReport(getDb))
 
   ipcMain.handle('email:sendWeeklyNow', async () => sendWeeklyDigest(getDb))
+
+  // ── Help Items ─────────────────────────────────────────────────────────────
+
+  ipcMain.handle('help:list', () => {
+    const db = getDb()
+    const rows = db.prepare(`SELECT * FROM help_items WHERE is_enabled = 1 ORDER BY order_index ASC`).all() as DbHelpItem[]
+    return rows.map((r) => ({
+      id: r.id, question: r.question, answer: r.answer,
+      category: r.category, icon: r.icon,
+      orderIndex: r.order_index, isEnabled: true, createdAt: r.created_at,
+    }))
+  })
+
+  ipcMain.handle('help:listAll', () => {
+    const db = getDb()
+    const rows = db.prepare(`SELECT * FROM help_items ORDER BY order_index ASC`).all() as DbHelpItem[]
+    return rows.map((r) => ({
+      id: r.id, question: r.question, answer: r.answer,
+      category: r.category, icon: r.icon,
+      orderIndex: r.order_index, isEnabled: !!r.is_enabled, createdAt: r.created_at,
+    }))
+  })
+
+  ipcMain.handle('help:upsert', (_event, item: { id: string; question: string; answer: string; category: string; icon: string; orderIndex: number; isEnabled: boolean; createdAt: string }) => {
+    const db = getDb()
+    db.prepare(`
+      INSERT INTO help_items (id, question, answer, category, icon, order_index, is_enabled, created_at)
+      VALUES (@id, @question, @answer, @category, @icon, @orderIndex, @isEnabled, @createdAt)
+      ON CONFLICT(id) DO UPDATE SET
+        question = excluded.question, answer = excluded.answer,
+        category = excluded.category, icon = excluded.icon,
+        order_index = excluded.order_index, is_enabled = excluded.is_enabled
+    `).run({ ...item, isEnabled: item.isEnabled ? 1 : 0 })
+    return { success: true }
+  })
+
+  ipcMain.handle('help:delete', (_event, id: string) => {
+    const db = getDb()
+    db.prepare(`DELETE FROM help_items WHERE id = ?`).run(id)
+    return { success: true }
+  })
+
+  ipcMain.handle('help:reorder', (_event, ids: string[]) => {
+    const db = getDb()
+    const update = db.prepare(`UPDATE help_items SET order_index = ? WHERE id = ?`)
+    db.transaction(() => { ids.forEach((id, i) => update.run(i, id)) })()
+    return { success: true }
+  })
 }
 
 /**
