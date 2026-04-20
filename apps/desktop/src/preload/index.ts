@@ -96,14 +96,21 @@ const api = {
   updater: {
     download: () => ipcRenderer.invoke('updater:download'),
     install: () => ipcRenderer.invoke('updater:install'),
+    checkNow: () => ipcRenderer.invoke('updater:checkNow'),
     onAvailable: (cb: (info: unknown) => void) => {
       ipcRenderer.on('update-available', (_e, info) => cb(info))
+    },
+    onNotAvailable: (cb: () => void) => {
+      ipcRenderer.on('update-not-available', () => cb())
     },
     onProgress: (cb: (progress: unknown) => void) => {
       ipcRenderer.on('update-download-progress', (_e, p) => cb(p))
     },
     onDownloaded: (cb: () => void) => {
       ipcRenderer.on('update-downloaded', () => cb())
+    },
+    onError: (cb: (message: string) => void) => {
+      ipcRenderer.on('update-error', (_e, message) => cb(message))
     },
   },
 

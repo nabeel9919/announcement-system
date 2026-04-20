@@ -396,10 +396,16 @@ export default function OperatorPage() {
     window.api.display.send({ type: 'queue_stats', categories: catStats, totalWaiting: catStats.reduce((s, c) => s + c.waiting, 0) })
   }, [tickets, categories])
 
+  const [updateDownloading, setUpdateDownloading] = useState(false)
+  const [updatePct, setUpdatePct] = useState(0)
+  const [updateError, setUpdateError] = useState('')
+
   // Updater events
   useEffect(() => {
     window.api.updater.onAvailable(() => useAppStore.getState().setUpdateAvailable(true))
-    window.api.updater.onDownloaded(() => useAppStore.getState().setUpdateDownloaded(true))
+    window.api.updater.onDownloaded(() => { useAppStore.getState().setUpdateDownloaded(true); setUpdateDownloading(false) })
+    window.api.updater.onProgress((p: any) => { setUpdateDownloading(true); setUpdatePct(Math.round(p.percent ?? 0)) })
+    window.api.updater.onError((msg: string) => { setUpdateError(msg); setUpdateDownloading(false) })
   }, [])
 
   // ── Helpers ──────────────────────────────────────────────────────────────
@@ -669,13 +675,27 @@ export default function OperatorPage() {
 
         {/* Update badges */}
         {updateDownloaded && (
-          <button onClick={() => window.api.updater.install()} className="flex items-center gap-1.5 rounded-lg bg-emerald-600/20 border border-emerald-600/30 px-2.5 py-1.5 text-xs text-emerald-300 hover:bg-emerald-600/30 transition-colors">
-            <ArrowUpCircle className="w-3 h-3" />Restart to update
+          <button onClick={() => window.api.updater.install()}
+            className="flex items-center gap-1.5 rounded-lg bg-emerald-600/20 border border-emerald-600/30 px-2.5 py-1.5 text-xs text-emerald-300 hover:bg-emerald-600/30 transition-colors">
+            <ArrowUpCircle className="w-3 h-3" /> Restart to update
           </button>
         )}
-        {updateAvailable && !updateDownloaded && (
-          <button onClick={() => window.api.updater.download()} className="flex items-center gap-1.5 rounded-lg bg-primary-600/20 border border-primary-600/30 px-2.5 py-1.5 text-xs text-primary-300 hover:bg-primary-600/30 transition-colors">
-            <Download className="w-3 h-3" />Update available
+        {updateAvailable && !updateDownloaded && !updateDownloading && (
+          <button onClick={() => { setUpdateError(''); setUpdateDownloading(true); window.api.updater.download() }}
+            className="flex items-center gap-1.5 rounded-lg bg-primary-600/20 border border-primary-600/30 px-2.5 py-1.5 text-xs text-primary-300 hover:bg-primary-600/30 transition-colors">
+            <Download className="w-3 h-3" /> Update available
+          </button>
+        )}
+        {updateDownloading && (
+          <div className="flex items-center gap-1.5 rounded-lg bg-primary-600/20 border border-primary-600/30 px-2.5 py-1.5 text-xs text-primary-300">
+            <Download className="w-3 h-3 animate-bounce" /> Downloading {updatePct}%
+          </div>
+        )}
+        {updateError && !updateDownloading && (
+          <button onClick={() => { setUpdateError(''); setUpdateDownloading(true); window.api.updater.download() }}
+            title={updateError}
+            className="flex items-center gap-1.5 rounded-lg bg-red-500/20 border border-red-500/30 px-2.5 py-1.5 text-xs text-red-400 hover:bg-red-500/30 transition-colors">
+            <Download className="w-3 h-3" /> Retry update
           </button>
         )}
 

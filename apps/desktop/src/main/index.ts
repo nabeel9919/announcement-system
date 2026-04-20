@@ -159,6 +159,10 @@ function setupAutoUpdater(win: BrowserWindow) {
     win.webContents.send('update-available', info)
   })
 
+  autoUpdater.on('update-not-available', () => {
+    win.webContents.send('update-not-available')
+  })
+
   autoUpdater.on('download-progress', (progress) => {
     win.webContents.send('update-download-progress', progress)
   })
@@ -169,17 +173,34 @@ function setupAutoUpdater(win: BrowserWindow) {
 
   autoUpdater.on('error', (err) => {
     console.error('[Updater] Error:', err)
+    win.webContents.send('update-error', err?.message ?? String(err))
   })
 
   // Check on startup, then every 4 hours
-  autoUpdater.checkForUpdates().catch(console.error)
+  autoUpdater.checkForUpdates().catch((err) => {
+    console.error('[Updater] Check failed:', err)
+    win.webContents.send('update-error', err?.message ?? String(err))
+  })
   setInterval(() => {
     autoUpdater.checkForUpdates().catch(console.error)
   }, 4 * 60 * 60 * 1000)
 
   // IPC: operator triggered update download
-  ipcMain.handle('updater:download', () => autoUpdater.downloadUpdate())
+  ipcMain.handle('updater:download', async () => {
+    try {
+      await autoUpdater.downloadUpdate()
+    } catch (err: any) {
+      win.webContents.send('update-error', err?.message ?? String(err))
+    }
+  })
   ipcMain.handle('updater:install', () => autoUpdater.quitAndInstall())
+  ipcMain.handle('updater:checkNow', async () => {
+    try {
+      await autoUpdater.checkForUpdates()
+    } catch (err: any) {
+      win.webContents.send('update-error', err?.message ?? String(err))
+    }
+  })
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
