@@ -132,7 +132,7 @@ export default function DisplayPage() {
 
   // ── IPC updates ───────────────────────────────────────────────────────────
   useEffect(() => {
-    window.api.display.onUpdate((payload: any) => {
+    const unsub = window.api.display.onUpdate((payload: any) => {
       if (!payload) return
 
       if (payload.type === 'call') {
@@ -167,7 +167,14 @@ export default function DisplayPage() {
       if (payload.type === 'config') {
         setState((prev) => ({ ...prev, ...payload.config }))
       }
+
+      if (payload.type === 'playlist') {
+        const list = (payload.videos ?? []) as { name: string; fileUrl: string }[]
+        setVideos(list)
+        setCurrentVideoIdx(0)
+      }
     })
+    return unsub
   }, [showLowerThird])
 
   // ── DB polling for queue stats ─────────────────────────────────────────────
@@ -349,9 +356,9 @@ export default function DisplayPage() {
               </div>
 
               {/* Window */}
-              <div className="text-right flex-shrink-0 max-w-[200px]">
+              <div className="text-right flex-shrink-0 max-w-[280px]">
                 <p className="text-white/50 text-xs uppercase tracking-widest mb-1">Proceed to</p>
-                <p className="text-primary-300 font-bold text-xl leading-tight truncate">{activeCall.windowLabel}</p>
+                <p className="text-primary-300 font-bold text-xl leading-tight break-words">{activeCall.windowLabel}</p>
               </div>
             </div>
           </div>

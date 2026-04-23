@@ -40,6 +40,8 @@ export interface FloorPin {
   x: number
   /** Percentage from top edge of the image (0–100) */
   y: number
+  /** Corridor waypoints drawn by admin — route from "You Are Here" to this pin */
+  path?: { x: number; y: number }[]
 }
 
 export interface FloorPlan {

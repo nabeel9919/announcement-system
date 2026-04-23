@@ -712,7 +712,10 @@ export default function SettingsPage() {
                 onClick={async () => {
                   setVideoAdding(true)
                   const result = await window.api.videos.add()
-                  if (result) setVideos(result)
+                  if (result) {
+                    setVideos(result)
+                    window.api.display.send({ type: 'playlist', videos: result })
+                  }
                   setVideoAdding(false)
                 }}
                 disabled={videoAdding}
@@ -757,6 +760,7 @@ export default function SettingsPage() {
                         if (!confirm(`Remove "${video.name}" from playlist?`)) return
                         const result = await window.api.videos.delete(video.name)
                         setVideos(result)
+                        window.api.display.send({ type: 'playlist', videos: result })
                       }}
                       className="p-1.5 rounded-lg text-zinc-600 hover:text-red-400 hover:bg-red-400/10 transition-colors"
                     >
@@ -2933,6 +2937,8 @@ function FloorPlansTab() {
   const [pinLabelInput, setPinLabelInput] = useState('')
   const [editingPin, setEditingPin] = useState<FloorPin | null>(null)
   const [addingImage, setAddingImage] = useState(false)
+  const [drawingForPinId, setDrawingForPinId] = useState<string | null>(null)
+  const [drawPoints, setDrawPoints] = useState<{ x: number; y: number }[]>([])
   const imgRef = useRef<HTMLImageElement>(null)
 
   const currentFloorPlanId: string = (config as any)?.currentFloorPlanId ?? ''
@@ -2983,12 +2989,38 @@ function FloorPlansTab() {
   }
 
   function handleMapClick(e: React.MouseEvent<HTMLDivElement>) {
-    if (!selectedPlan || editingPin) return
     const rect = e.currentTarget.getBoundingClientRect()
     const x = ((e.clientX - rect.left) / rect.width) * 100
     const y = ((e.clientY - rect.top) / rect.height) * 100
+    if (drawingForPinId) {
+      setDrawPoints(prev => [...prev, { x, y }])
+      return
+    }
+    if (!selectedPlan || editingPin) return
     setPendingPin({ x, y })
     setPinLabelInput('')
+  }
+
+  function startDrawPath(pin: FloorPin) {
+    setDrawingForPinId(pin.id)
+    setDrawPoints(pin.path ?? [])
+    setEditingPin(null)
+    setPendingPin(null)
+  }
+
+  async function saveDrawnPath() {
+    if (!selectedPlan || !drawingForPinId) return
+    const updated = {
+      ...selectedPlan,
+      pins: selectedPlan.pins.map(p =>
+        p.id === drawingForPinId ? { ...p, path: drawPoints } : p
+      ),
+    }
+    await window.api.floorPlans.upsert(updated)
+    setPlans(prev => prev.map(p => p.id === updated.id ? updated : p))
+    setSelectedPlan(updated)
+    setDrawingForPinId(null)
+    setDrawPoints([])
   }
 
   async function confirmPin() {
@@ -3072,11 +3104,37 @@ function FloorPlansTab() {
 
               <div className="rounded-xl border border-zinc-700 overflow-hidden bg-zinc-900">
                 <p className="text-xs text-zinc-500 px-4 py-2 border-b border-zinc-800">
-                  {pendingPin ? '📍 Type a name for this pin below' : 'Click map to place a pin · Click a pin → "Set as Here" or delete'}
+                  {drawingForPinId
+                    ? `🛤️ Click along the corridor to lay waypoints · Undo / Clear / Save Path below`
+                    : pendingPin ? '📍 Type a name for this pin below'
+                    : 'Click map to place a pin · Click a pin → Set as Here / Draw Path / Delete'}
                 </p>
+                <div className="overflow-y-auto max-h-[450px]">
                 <div className="relative cursor-crosshair" onClick={handleMapClick}>
                   <img ref={imgRef} src={selectedPlan.imageUrl} alt={selectedPlan.label}
-                    className="w-full h-auto max-h-[420px] object-contain bg-zinc-950" draggable={false} />
+                    className="w-full block" draggable={false} />
+                  {/* SVG overlay — shows saved paths + live drawing */}
+                  <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
+                    {selectedPlan.pins.map(pin => pin.path && pin.path.length > 1 && (
+                      <polyline key={pin.id}
+                        points={pin.path.map(p => `${p.x},${p.y}`).join(' ')}
+                        stroke={drawingForPinId === pin.id ? '#3B82F6' : '#6366F1'}
+                        strokeWidth="1" strokeDasharray="2 1"
+                        fill="none" strokeLinecap="round" strokeLinejoin="round"
+                        opacity="0.6"
+                      />
+                    ))}
+                    {drawingForPinId && drawPoints.length > 1 && (
+                      <polyline
+                        points={drawPoints.map(p => `${p.x},${p.y}`).join(' ')}
+                        stroke="#3B82F6" strokeWidth="1.5" strokeDasharray="3 1.5"
+                        fill="none" strokeLinecap="round" strokeLinejoin="round"
+                      />
+                    )}
+                    {drawingForPinId && drawPoints.map((pt, i) => (
+                      <circle key={i} cx={pt.x} cy={pt.y} r="1.5" fill="#3B82F6" stroke="white" strokeWidth="0.5" />
+                    ))}
+                  </svg>
                   {selectedPlan.pins.map((pin) => (
                     <div key={pin.id} style={{ left: `${pin.x}%`, top: `${pin.y}%` }}
                       className="absolute -translate-x-1/2 -translate-y-full"
@@ -3096,6 +3154,10 @@ function FloorPlansTab() {
                             className="text-xs rounded px-2 py-1 bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/40 transition-colors">
                             📍 Set as Here
                           </button>
+                          <button onClick={() => { startDrawPath(pin) }}
+                            className="text-xs rounded px-2 py-1 bg-blue-600/20 text-blue-300 hover:bg-blue-600/40 transition-colors">
+                            🛤️ Draw Path
+                          </button>
                           <button onClick={() => { deletePin(pin.id); setEditingPin(null) }}
                             className="text-xs rounded px-2 py-1 bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors">
                             <Trash2 className="w-3 h-3" />
@@ -3114,7 +3176,26 @@ function FloorPlansTab() {
                     </div>
                   )}
                 </div>
+                </div>
               </div>
+
+              {drawingForPinId && (
+                <div className="flex items-center gap-3 rounded-xl border border-blue-500/40 bg-blue-500/10 px-4 py-3">
+                  <Pencil className="w-4 h-4 text-blue-400 flex-shrink-0" />
+                  <span className="flex-1 text-sm text-blue-300">
+                    Drawing path to <strong>{selectedPlan?.pins.find(p => p.id === drawingForPinId)?.label}</strong>
+                  </span>
+                  <button onClick={() => setDrawPoints(prev => prev.slice(0, -1))} disabled={drawPoints.length === 0}
+                    className="text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-30 transition-colors px-2 py-1 rounded hover:bg-zinc-700">Undo</button>
+                  <button onClick={() => setDrawPoints([])}
+                    className="text-xs text-zinc-400 hover:text-zinc-200 transition-colors px-2 py-1 rounded hover:bg-zinc-700">Clear</button>
+                  <button onClick={saveDrawnPath}
+                    className="rounded-lg bg-blue-600 hover:bg-blue-500 px-3 py-1.5 text-xs font-semibold text-white transition-colors">Save Path</button>
+                  <button onClick={() => { setDrawingForPinId(null); setDrawPoints([]) }} className="text-zinc-500 hover:text-zinc-300 transition-colors">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
 
               {pendingPin && (
                 <div className="flex items-center gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3">

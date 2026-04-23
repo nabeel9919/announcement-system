@@ -1532,7 +1532,12 @@ export function registerVideoProtocol() {
     const dir = getVideosDir()
     const filename = decodeURIComponent(url.pathname.replace(/^\//, ''))
     const filePath = join(dir, filename)
-    return net.fetch(pathToFileURL(filePath).href)
+    const fileUrl = pathToFileURL(filePath).href
+    const range = request.headers.get('range')
+    if (range) {
+      return net.fetch(fileUrl, { headers: { range } })
+    }
+    return net.fetch(fileUrl)
   })
 }
 

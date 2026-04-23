@@ -3,7 +3,8 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { createOperatorWindow, createDisplayWindow, createKioskWindow, getScreenList } from './windows'
-import { setupIpcHandlers, getDb, registerVideoProtocol, registerFloorPlanProtocol } from './ipc'
+import { setupIpcHandlers, getDb, getFloorPlansDir, registerVideoProtocol, registerFloorPlanProtocol } from './ipc'
+import { listVideos } from './video-manager'
 import { setupPrintHandlers } from './print'
 import { checkLicense } from './license'
 import { LanServer } from './lan-server'
@@ -100,6 +101,8 @@ app.whenReady().then(async () => {
   lanServer = new LanServer(
     () => getDb(),
     () => operatorWindow,
+    4000,
+    getFloorPlansDir(),
   )
   lanServer.start().then(() => {
     // Register URL and token getters so ipc.ts can return them
@@ -291,6 +294,14 @@ ipcMain.handle('display:register', (_event) => {
     const screenIdx = idx >= 0 ? idx : 0
     displayWindows.set(screenIdx, win)
     console.log(`[display] Window registered on screen ${screenIdx}`)
+    // Push current playlist so display always starts with up-to-date videos
+    try {
+      const videos = listVideos().map((v) => ({
+        name: v.name,
+        fileUrl: `local-video://videos/${encodeURIComponent(v.name)}`,
+      }))
+      win.webContents.send('display:update', { type: 'playlist', videos })
+    } catch { /* ignore */ }
   }
 })
 

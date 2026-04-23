@@ -19,6 +19,7 @@ function sharedPrefs() {
     sandbox: false,
     contextIsolation: true,
     nodeIntegration: false,
+    autoplayPolicy: 'no-user-gesture-required' as const,
   }
 }
 

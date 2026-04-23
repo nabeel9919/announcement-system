@@ -5,6 +5,8 @@
  */
 import * as http from 'http'
 import * as os from 'os'
+import * as fs from 'fs'
+import * as nodePath from 'path'
 import { randomUUID, createHash } from 'crypto'
 import type { BrowserWindow } from 'electron'
 import type Database from 'better-sqlite3'
@@ -94,6 +96,7 @@ export class LanServer {
   private actualPort: number | null = null
   private getDb: GetDb
   private getOperatorWindow: GetWindow
+  private floorPlansDir: string = ''
 
   // ── Security ─────────────────────────────────────────────────────────────
   private apiToken: string = ''
@@ -105,10 +108,11 @@ export class LanServer {
   private readonly RATE_WINDOW_MS = 5 * 60 * 1000   // 5 min sliding window
   private readonly RATE_BLOCK_MS  = 15 * 60 * 1000  // 15 min block after max failures
 
-  constructor(getDb: GetDb, getOperatorWindow: GetWindow, port = 4000) {
+  constructor(getDb: GetDb, getOperatorWindow: GetWindow, port = 4000, floorPlansDir = '') {
     this.getDb = getDb
     this.getOperatorWindow = getOperatorWindow
     this.port = port
+    this.floorPlansDir = floorPlansDir
   }
 
   getUrl(): string | null {
@@ -626,6 +630,55 @@ export class LanServer {
       return
     }
 
+    // ── GET /api/kiosk/help — enabled help items for tablet ──────────────────
+    if (method === 'GET' && path === '/api/kiosk/help') {
+      const t = new URL('http://x' + req.url!).searchParams.get('token') ?? ''
+      if (!this.validKioskToken(t)) { reply(401, { error: 'Unauthorized' }); return }
+      try {
+        const db = this.getDb()
+        const items = db.prepare(
+          `SELECT id, question, answer, category, icon, order_index FROM help_items WHERE is_enabled=1 ORDER BY order_index ASC`
+        ).all()
+        reply(200, { items })
+      } catch (e) { reply(500, { error: String(e) }) }
+      return
+    }
+
+    // ── GET /api/kiosk/floor-plans — floor plan list + pins for tablet ────────
+    if (method === 'GET' && path === '/api/kiosk/floor-plans') {
+      const t = new URL('http://x' + req.url!).searchParams.get('token') ?? ''
+      if (!this.validKioskToken(t)) { reply(401, { error: 'Unauthorized' }); return }
+      try {
+        const db = this.getDb()
+        const rows = db.prepare(`SELECT id, label, image_file, pins FROM floor_plans ORDER BY created_at ASC`).all() as { id: string; label: string; image_file: string; pins: string }[]
+        const plans = rows.map(r => ({
+          id: r.id,
+          label: r.label,
+          imageUrl: `/api/kiosk/floor-image/${encodeURIComponent(r.image_file)}?token=${t}`,
+          pins: JSON.parse(r.pins || '[]'),
+        }))
+        const localCfg = readLocalConfig() as any
+        const instCfg = localCfg?.installationConfig ?? localCfg ?? {}
+        reply(200, { plans, currentFloorPlanId: instCfg?.currentFloorPlanId ?? '', currentPinId: instCfg?.currentPinId ?? '' })
+      } catch (e) { reply(500, { error: String(e) }) }
+      return
+    }
+
+    // ── GET /api/kiosk/floor-image/:filename — serve floor plan image ─────────
+    if (method === 'GET' && path.startsWith('/api/kiosk/floor-image/')) {
+      const t = new URL('http://x' + req.url!).searchParams.get('token') ?? ''
+      if (!this.validKioskToken(t)) { res.writeHead(401); res.end(); return }
+      const filename = decodeURIComponent(path.slice('/api/kiosk/floor-image/'.length))
+      if (!filename || filename.includes('..') || filename.includes('/')) { res.writeHead(400); res.end(); return }
+      const filePath = this.floorPlansDir ? nodePath.join(this.floorPlansDir, filename) : ''
+      if (!filePath || !fs.existsSync(filePath)) { res.writeHead(404); res.end('Not found'); return }
+      const ext = filename.split('.').pop()?.toLowerCase() ?? 'png'
+      const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'svg' ? 'image/svg+xml' : 'image/png'
+      res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'max-age=3600' })
+      fs.createReadStream(filePath).pipe(res)
+      return
+    }
+
     // ── POST /api/kiosk/issue — issue a ticket from a tablet ─────────────────
     if (method === 'POST' && path === '/api/kiosk/issue') {
       if (!this.checkKioskAuth(req)) {
@@ -829,9 +882,122 @@ html,body{height:100%;overflow:hidden;background:#0a0a0f;color:#f4f4f5;font-fami
 .err-title{font-size:24px;font-weight:700;color:#ef4444}
 .err-msg{font-size:15px;color:#71717a;max-width:420px}
 .err-retry{background:#18181b;border:2px solid #27272a;color:#a1a1aa;border-radius:12px;padding:12px 28px;font-size:15px;font-weight:600;cursor:pointer;margin-top:8px}
+
+/* ── Home ── */
+.home-body{flex:1;overflow-y:auto;padding:28px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px}
+.home-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;width:100%;max-width:600px}
+.home-btn{border-radius:24px;border:2px solid;padding:32px 20px;display:flex;flex-direction:column;align-items:center;gap:14px;cursor:pointer;transition:transform .12s;text-align:center;width:100%;background:inherit}
+.home-btn:active{transform:scale(.97)}
+.home-btn-icon{width:64px;height:64px;border-radius:18px;display:flex;align-items:center;justify-content:center;font-size:28px;flex-shrink:0}
+.home-btn-title{font-size:clamp(16px,2.5vw,20px);font-weight:700;color:#f4f4f5}
+.home-btn-desc{font-size:13px;color:#71717a}
+.home-help-btn{width:100%;max-width:600px;border-radius:24px;border:2px solid #10b98140;background:#10b98110;padding:20px 28px;display:flex;align-items:center;gap:20px;cursor:pointer;text-align:left}
+.home-help-btn:active{transform:scale(.98)}
+
+/* ── Help ── */
+.help-title-bar{font-size:clamp(20px,4vw,30px);font-weight:800;color:#f4f4f5;text-align:center;padding:16px 28px 0;flex-shrink:0}
+.help-body{flex:1;overflow-y:auto;padding:12px 28px 28px}
+.help-cat-label{font-size:11px;font-weight:700;color:#52525b;text-transform:uppercase;letter-spacing:.08em;padding:16px 0 8px}
+.help-card{border:1px solid #27272a;border-radius:16px;background:#18181b;overflow:hidden;cursor:pointer;margin-bottom:8px}
+.help-card-hdr{display:flex;align-items:center;gap:12px;padding:16px 18px}
+.help-card-icon{font-size:22px;flex-shrink:0}
+.help-card-q{flex:1;font-size:clamp(14px,2vw,16px);font-weight:600;color:#f4f4f5;text-align:left}
+.help-card-chev{font-size:18px;color:#52525b;transition:transform .2s;flex-shrink:0}
+.help-card.open .help-card-chev{transform:rotate(180deg)}
+.help-card-ans{display:none;padding:0 18px 16px 52px;font-size:14px;color:#a1a1aa;line-height:1.6}
+.help-card.open .help-card-ans{display:block}
+.back-btn{display:flex;align-items:center;gap:6px;background:none;border:none;color:#71717a;font-size:14px;cursor:pointer;padding:12px 28px;margin:0 auto;font-weight:500;flex-shrink:0}
+/* ── Map ── */
+.map-body{flex:1;overflow-y:auto;padding:8px 12px 12px;display:flex;flex-direction:column;gap:8px}
+.map-plan-sel{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;padding:0 4px;flex-shrink:0}
+.map-plan-tab{border-radius:20px;border:2px solid #27272a;background:#18181b;color:#a1a1aa;font-size:13px;font-weight:600;padding:6px 16px;cursor:pointer;transition:all .15s}
+.map-plan-tab.active{border-color:#4f46e5;background:#4f46e510;color:#818cf8}
+.map-img-wrap{position:relative;width:100%;border-radius:12px;overflow:hidden;border:1px solid #27272a;background:#09090b;flex-shrink:0}
+.map-img-wrap img{width:100%;display:block}
+.map-img-wrap svg{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none}
+.map-pin-label{position:absolute;transform:translate(-50%,-100%);display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer}
+.map-pin-bubble{font-size:11px;font-weight:700;padding:3px 8px;border-radius:20px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.4)}
+.map-pin-dot{width:10px;height:10px;border-radius:50%;border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.map-dest-info{border-radius:16px;border:1px solid #27272a;background:#18181b;padding:16px 18px;text-align:center;font-size:14px;color:#a1a1aa}
+.map-dest-info strong{color:#f4f4f5;font-size:16px;display:block;margin-bottom:4px}
 </style>
 </head>
 <body>
+
+<!-- Home -->
+<div id="s-home" class="screen">
+  <div class="hdr">
+    <div>
+      <div class="hdr-org" id="home-hdr-org">Queue System</div>
+      <div class="hdr-sub">Self Service</div>
+    </div>
+    <div class="hdr-tag"><div class="hdr-dot"></div><span id="home-hdr-kid"></span></div>
+  </div>
+  <div class="home-body">
+    <div class="home-hint" style="font-size:clamp(14px,2.5vw,18px);color:#71717a;text-align:center">What would you like to do?</div>
+    <div class="home-grid">
+      <button class="home-btn" style="border-color:#4f46e540;background:#4f46e510" onclick="show('s-cats')">
+        <div class="home-btn-icon" style="background:#4f46e5">🎫</div>
+        <div class="home-btn-title">Get Ticket</div>
+        <div class="home-btn-desc">Join the queue</div>
+      </button>
+      <button class="home-btn" style="border-color:#f59e0b40;background:#f59e0b10" onclick="startFeedbackFromHome()">
+        <div class="home-btn-icon" style="background:#d97706">⭐</div>
+        <div class="home-btn-title">Give Feedback</div>
+        <div class="home-btn-desc">Rate our service</div>
+      </button>
+    </div>
+    <button class="home-help-btn" onclick="showHelp()">
+      <div class="home-btn-icon" style="background:#059669">❓</div>
+      <div>
+        <div class="home-btn-title">Help &amp; Information</div>
+        <div class="home-btn-desc">Find answers and navigate the facility</div>
+      </div>
+    </button>
+    <button class="home-help-btn" style="border-color:#3b82f640;background:#3b82f610" onclick="showMap()">
+      <div class="home-btn-icon" style="background:#2563eb">🗺️</div>
+      <div>
+        <div class="home-btn-title">Floor Map</div>
+        <div class="home-btn-desc">Find rooms and navigate the building</div>
+      </div>
+    </button>
+  </div>
+</div>
+
+<!-- Help -->
+<div id="s-help" class="screen">
+  <div class="hdr">
+    <div>
+      <div class="hdr-org" id="help-hdr-org">Queue System</div>
+      <div class="hdr-sub">Help &amp; Information</div>
+    </div>
+    <div class="hdr-tag"><div class="hdr-dot"></div><span id="help-hdr-kid"></span></div>
+  </div>
+  <div class="help-title-bar">Help &amp; FAQ</div>
+  <div class="help-body" id="help-body">
+    <p style="color:#52525b;text-align:center;padding:40px">Loading…</p>
+  </div>
+  <button class="back-btn" onclick="show('s-home')">‹ Back to Home</button>
+</div>
+
+<!-- Map -->
+<div id="s-map" class="screen">
+  <div class="hdr">
+    <div>
+      <div class="hdr-org" id="map-hdr-org">Queue System</div>
+      <div class="hdr-sub">Floor Map</div>
+    </div>
+    <div class="hdr-tag"><div class="hdr-dot"></div><span id="map-hdr-kid"></span></div>
+  </div>
+  <div class="map-body">
+    <div class="map-plan-sel" id="map-plan-sel"></div>
+    <div class="map-img-wrap" id="map-img-wrap">
+      <p style="color:#52525b;text-align:center;padding:40px">Loading map…</p>
+    </div>
+    <div class="map-dest-info" id="map-dest-info" style="display:none"></div>
+  </div>
+  <button class="back-btn" onclick="show(&quot;s-home&quot;)">&#8249; Back to Home</button>
+</div>
 
 <!-- Loading -->
 <div id="s-loading" class="screen active">
@@ -871,10 +1037,11 @@ html,body{height:100%;overflow:hidden;background:#0a0a0f;color:#f4f4f5;font-fami
     <div class="hdr-tag"><div class="hdr-dot"></div><span id="hdr-kid"></span></div>
   </div>
   <div class="cats-body">
-    <div class="cats-title">Welcome!</div>
-    <div class="cats-hint">Select the service you need</div>
+    <div class="cats-title">Select a Service</div>
+    <div class="cats-hint">Tap the service you need</div>
     <div class="cats-grid" id="cats-grid"></div>
   </div>
+  <button class="back-btn" onclick="show('s-home')">‹ Back to Home</button>
 </div>
 
 <!-- Questions -->
@@ -1017,9 +1184,9 @@ function post(path, body) {
   }).then(function(r) { return r.json() })
 }
 function setKidLabels() {
-  var kidIds = ["hdr-kid","qs-hdr-kid","tk-hdr-kid","fb-hdr-kid"]
+  var kidIds = ["hdr-kid","qs-hdr-kid","tk-hdr-kid","fb-hdr-kid","home-hdr-kid","help-hdr-kid"]
   kidIds.forEach(function(id) { var el = document.getElementById(id); if (el) el.textContent = KIOSK_LABEL })
-  var orgIds = ["hdr-org","qs-hdr-org","tk-hdr-org","fb-hdr-org"]
+  var orgIds = ["hdr-org","qs-hdr-org","tk-hdr-org","fb-hdr-org","home-hdr-org","help-hdr-org"]
   orgIds.forEach(function(id) { var el = document.getElementById(id); if (el) el.textContent = orgName || "Queue System" })
 }
 function clearResetTimer() { if (resetTimer) { clearTimeout(resetTimer); resetTimer = null } }
@@ -1060,7 +1227,7 @@ function init() {
       if (hoursConfig && hoursConfig.enabled && !isWithinHours(hoursConfig)) {
         showClosedScreen()
       } else {
-        show("s-cats")
+        show("s-home")
       }
       // Periodically re-check hours (e.g. kiosk opens at 08:00 while tablet is already on)
       if (hoursCheckInterval) clearInterval(hoursCheckInterval)
@@ -1070,7 +1237,7 @@ function init() {
           var curScreen = document.querySelector(".screen.active")
           var isClosed = curScreen && curScreen.id === "s-closed"
           if (!open && !isClosed) { showClosedScreen() }
-          if (open && isClosed) { show("s-cats") }
+          if (open && isClosed) { show("s-home") }
         }
       }, 60000)
     })
@@ -1433,7 +1600,169 @@ function resetKiosk() {
   selCat = null; qAnswers = []; fbAnswers = []
   issuedTicket = null; qIdx = 0; fbIdx = 0
   buildCategoryGrid()
-  show("s-cats")
+  show("s-home")
+}
+
+// ── Help ─────────────────────────────────────────────────────────────────────
+var helpItems = [], helpLoaded = false
+
+function showHelp() {
+  show("s-help")
+  if (!helpLoaded) { loadHelp() } else { renderHelp() }
+}
+
+function loadHelp() {
+  fetch("/api/kiosk/help?token=" + encodeURIComponent(TOKEN))
+    .then(function(r) { return r.json() })
+    .then(function(data) {
+      helpItems = data.items || []
+      helpLoaded = true
+      renderHelp()
+    })
+    .catch(function() {
+      var body = document.getElementById("help-body")
+      if (body) body.innerHTML = "<p style='color:#52525b;text-align:center;padding:40px'>Could not load help items.</p>"
+    })
+}
+
+function renderHelp() {
+  var body = document.getElementById("help-body")
+  if (!body) return
+  if (helpItems.length === 0) {
+    body.innerHTML = "<p style='color:#52525b;text-align:center;padding:40px'>No help items available.</p>"
+    return
+  }
+  var cats = [], catMap = {}
+  helpItems.forEach(function(it) {
+    if (!catMap[it.category]) { catMap[it.category] = []; cats.push(it.category) }
+    catMap[it.category].push(it)
+  })
+  body.innerHTML = cats.map(function(cat) {
+    return "<div class='help-cat-label'>" + esc(cat) + "</div>" +
+      catMap[cat].map(function(it) {
+        return "<div class='help-card' onclick='toggleHelp(this)'>" +
+          "<div class='help-card-hdr'>" +
+          "<div class='help-card-icon'>" + esc(it.icon || "❓") + "</div>" +
+          "<div class='help-card-q'>" + esc(it.question) + "</div>" +
+          "<div class='help-card-chev'>⌄</div>" +
+          "</div>" +
+          "<div class='help-card-ans'>" + esc(it.answer) + "</div>" +
+          "</div>"
+      }).join("")
+  }).join("")
+}
+
+function toggleHelp(card) {
+  var wasOpen = card.classList.contains("open")
+  document.querySelectorAll(".help-card").forEach(function(c) { c.classList.remove("open") })
+  if (!wasOpen) card.classList.add("open")
+}
+
+// ── Floor Map ────────────────────────────────────────────────────────────────
+var mapPlans = [], mapCurrentFloorId = "", mapCurrentPinId = "", mapLoaded = false
+var mapActivePlanId = null, mapSelectedPinId = null
+
+function showMap() {
+  show("s-map")
+  var el = document.getElementById("map-hdr-org"); if (el) el.textContent = orgName || "Queue System"
+  var el2 = document.getElementById("map-hdr-kid"); if (el2) el2.textContent = KIOSK_LABEL
+  if (!mapLoaded) { loadMap() } else { renderMap() }
+}
+
+function loadMap() {
+  fetch("/api/kiosk/floor-plans?token=" + encodeURIComponent(TOKEN))
+    .then(function(r) { return r.json() })
+    .then(function(data) {
+      mapPlans = data.plans || []
+      mapCurrentFloorId = data.currentFloorPlanId || ""
+      mapCurrentPinId = data.currentPinId || ""
+      mapLoaded = true
+      if (!mapActivePlanId && mapCurrentFloorId) mapActivePlanId = mapCurrentFloorId
+      if (!mapActivePlanId && mapPlans.length > 0) mapActivePlanId = mapPlans[0].id
+      renderMap()
+    })
+    .catch(function() {
+      var w = document.getElementById("map-img-wrap")
+      if (w) w.innerHTML = "<p style='color:#ef4444;text-align:center;padding:40px'>Failed to load maps.</p>"
+    })
+}
+
+function renderMap() {
+  var selEl = document.getElementById("map-plan-sel")
+  var wrap = document.getElementById("map-img-wrap")
+  var info = document.getElementById("map-dest-info")
+  if (!selEl || !wrap) return
+  if (mapPlans.length === 0) {
+    wrap.innerHTML = "<p style='color:#52525b;text-align:center;padding:40px'>No floor plans available.</p>"
+    selEl.innerHTML = ""
+    return
+  }
+  selEl.innerHTML = mapPlans.map(function(p) {
+    var cls = p.id === mapActivePlanId ? "map-plan-tab active" : "map-plan-tab"
+    return "<button class='" + cls + "' onclick='switchPlan(&quot;" + p.id + "&quot;)'>" + esc(p.label) + "</button>"
+  }).join("")
+  var plan = mapPlans.find(function(p) { return p.id === mapActivePlanId }) || mapPlans[0]
+  if (!plan) return
+  var pins = plan.pins || []
+  var herePinId = (plan.id === mapCurrentFloorId) ? mapCurrentPinId : ""
+  var herePin = pins.find(function(p) { return p.id === herePinId }) || null
+  var destPin = mapSelectedPinId ? pins.find(function(p) { return p.id === mapSelectedPinId }) : null
+  var pinsHtml = pins.map(function(pin) {
+    var isHere = pin.id === herePinId
+    var bg = isHere ? "#10b981" : (pin.id === mapSelectedPinId ? "#f59e0b" : "#4f46e5")
+    return "<div class='map-pin-label' style='left:" + pin.x + "%;top:" + pin.y + "%' onclick='selectMapPin(&quot;" + pin.id + "&quot;)'>" +
+      "<div class='map-pin-bubble' style='background:" + bg + ";color:white'>" + esc(pin.label) + (isHere ? " &#x1F4CD;" : "") + "</div>" +
+      "<div class='map-pin-dot' style='background:" + bg + "'></div>" +
+      "</div>"
+  }).join("")
+  var svgPath = ""
+  if (herePin && destPin) {
+    var pts = (destPin.path && destPin.path.length > 1)
+      ? destPin.path.map(function(p) { return p.x + "," + p.y }).join(" ")
+      : (herePin.x + "," + herePin.y + " " + destPin.x + "," + destPin.y)
+    svgPath = "<polyline points='" + pts + "' stroke='#10b981' stroke-width='1.5' stroke-dasharray='3 1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/>" +
+      "<circle cx='" + destPin.x + "' cy='" + destPin.y + "' r='2.5' fill='#10b981' opacity='.7'/>"
+  }
+  wrap.innerHTML = "<img src='" + esc(plan.imageUrl) + "' alt='" + esc(plan.label) + "'/>" +
+    "<svg viewBox='0 0 100 100' preserveAspectRatio='none'>" + svgPath + "</svg>" +
+    pinsHtml
+  if (info) {
+    if (destPin) {
+      info.style.display = ""
+      info.innerHTML = (herePin ? "<strong>" + esc(herePin.label) + "</strong> &rarr; <strong>" + esc(destPin.label) + "</strong>" : "<strong>" + esc(destPin.label) + "</strong>") +
+        "<div style='margin-top:6px;font-size:12px'>Follow the green path on the map above</div>"
+    } else {
+      info.style.display = "none"
+    }
+  }
+}
+
+function switchPlan(planId) {
+  mapActivePlanId = planId
+  mapSelectedPinId = null
+  renderMap()
+}
+
+function selectMapPin(pinId) {
+  mapSelectedPinId = mapSelectedPinId === pinId ? null : pinId
+  renderMap()
+}
+
+// ── Standalone feedback (from Home) ──────────────────────────────────────────
+function startFeedbackFromHome() {
+  issuedTicket = null
+  fbAnswers = []
+  visibleFbQs = computeVisibleFbQs([])
+  fbIdx = 0
+  if (visibleFbQs.length === 0) {
+    document.getElementById("err-msg").textContent = "No feedback questions configured yet."
+    show("s-err")
+    return
+  }
+  renderFbQuestion()
+  show("s-fb")
+  var el = document.getElementById("fb-hdr-org"); if (el) el.textContent = orgName || "Queue System"
+  var el2 = document.getElementById("fb-hdr-kid"); if (el2) el2.textContent = KIOSK_LABEL
 }
 
 // ── Start ────────────────────────────────────────────────────────────────────
@@ -1460,145 +1789,176 @@ init()
 <title>${orgName} — Queue Panel</title>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;overflow:hidden;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;-webkit-tap-highlight-color:transparent}
 :root{
-  --bg:#0a0a0f;--s1:#111116;--s2:#18181b;--b1:#27272a;--b2:#3f3f46;
-  --tx:#fafafa;--mt:#71717a;--dm:#52525b;
+  --sb:#1a2744;--sb2:#22305a;--sb-bd:#2d3f5f;--sb-tx:#e2e8f0;--sb-mt:#94a3b8;--sb-dm:#64748b;
+  --bg:#f1f5f9;--white:#ffffff;--bd:#e2e8f0;--tx:#1e293b;--mt:#64748b;--dm:#94a3b8;
   --pr:#4f46e5;--ph:#4338ca;--pl:#818cf8;
   --em:#10b981;--am:#f59e0b;--rd:#ef4444;--bl:#3b82f6;
 }
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--tx);display:flex;flex-direction:column;height:100vh;font-size:14px}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:14px;display:flex;height:100vh;overflow:hidden}
 input,select,button{font-family:inherit;font-size:inherit}
-/* ── Screens ─────────────────────────────────────────── */
-.scr{display:none;flex-direction:column;height:100vh;overflow:hidden}
+
+/* ── Screens ── */
+.scr{display:none;width:100%;height:100vh;overflow:hidden}
 .scr.active{display:flex}
-/* ── LOGIN ───────────────────────────────────────────── */
+
+/* ── LOGIN ── */
 #s-login{align-items:center;justify-content:center;background:var(--bg);padding:20px}
-.l-wrap{width:100%;max-width:340px}
+.l-wrap{width:100%;max-width:360px}
 .l-brand{text-align:center;margin-bottom:28px}
-.l-logo{width:52px;height:52px;border-radius:14px;background:var(--pr);display:flex;align-items:center;justify-content:center;margin:0 auto 12px;font-size:22px;box-shadow:0 8px 24px rgba(79,70,229,.35)}
-.l-brand h1{font-size:18px;font-weight:700;color:var(--tx)}
-.l-brand p{font-size:12px;color:var(--mt);margin-top:3px}
-.l-card{background:var(--s1);border:1px solid var(--b1);border-radius:14px;padding:24px}
-.lbl{display:block;font-size:11px;font-weight:600;color:var(--mt);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
-.inp{width:100%;background:var(--bg);border:1px solid var(--b1);border-radius:8px;padding:10px 13px;color:var(--tx);outline:none;transition:border-color .15s}
+.l-logo{width:56px;height:56px;border-radius:16px;background:var(--pr);display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:24px;box-shadow:0 8px 24px rgba(79,70,229,.3)}
+.l-brand h1{font-size:20px;font-weight:800;color:var(--tx)}
+.l-brand p{font-size:13px;color:var(--mt);margin-top:4px}
+.l-card{background:var(--white);border:1px solid var(--bd);border-radius:16px;padding:28px;box-shadow:0 4px 20px rgba(0,0,0,.07)}
+.lbl{display:block;font-size:11px;font-weight:700;color:var(--mt);text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px}
+.inp{width:100%;background:var(--bg);border:1.5px solid var(--bd);border-radius:10px;padding:11px 14px;color:var(--tx);outline:none;transition:border-color .15s}
 .inp:focus{border-color:var(--pr)}
 .inp::placeholder{color:var(--dm)}
 .pw-wrap{position:relative}
-.pw-wrap .inp{padding-right:38px}
-.pw-eye{position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--dm);cursor:pointer;padding:4px;font-size:14px;line-height:1}
+.pw-wrap .inp{padding-right:40px}
+.pw-eye{position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--dm);cursor:pointer;padding:4px;font-size:14px;line-height:1}
 .pw-eye:hover{color:var(--mt)}
-.l-err{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:7px;padding:8px 11px;font-size:12px;color:#fca5a5;margin-top:10px}
-.f-gap{margin-top:12px}
-/* ── Buttons ─────────────────────────────────────────── */
-.btn-pr{background:var(--pr);color:#fff;border:none;border-radius:8px;padding:11px 18px;font-weight:600;cursor:pointer;transition:background .15s;width:100%;margin-top:16px}
+.l-err{background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:9px 13px;font-size:12px;color:#dc2626;margin-top:10px}
+.f-gap{margin-top:14px}
+.btn-pr{background:var(--pr);color:#fff;border:none;border-radius:10px;padding:13px 20px;font-weight:700;cursor:pointer;transition:background .15s;width:100%;margin-top:18px;font-size:15px}
 .btn-pr:hover{background:var(--ph)}
-.btn-pr:disabled{background:var(--b1);color:var(--dm);cursor:not-allowed}
-.btn-ghost{background:transparent;border:1px solid var(--b1);border-radius:8px;padding:11px 18px;color:var(--mt);cursor:pointer;transition:all .15s;width:100%}
-.btn-ghost:hover{background:var(--s2);color:var(--tx)}
-.btn-sm{background:var(--s2);border:1px solid var(--b1);border-radius:7px;padding:6px 12px;color:var(--mt);cursor:pointer;transition:all .15s;font-size:12px;white-space:nowrap}
-.btn-sm:hover{color:var(--tx);background:var(--b1)}
-/* ── DEPT PICKER ─────────────────────────────────────── */
-#s-dept{background:var(--bg);align-items:center;justify-content:flex-start;padding:0;overflow-y:auto}
-.d-wrap{width:100%;max-width:440px;padding:32px 20px;margin:0 auto}
-.d-hdr{text-align:center;margin-bottom:28px}
-.d-logo{width:52px;height:52px;border-radius:14px;background:var(--pr);display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:22px;box-shadow:0 8px 24px rgba(79,70,229,.35)}
-.d-hdr h2{font-size:18px;font-weight:700;color:var(--tx)}
-.d-hdr p{font-size:13px;color:var(--mt);margin-top:4px}
-.dept-card{width:100%;display:flex;align-items:center;gap:14px;background:var(--s1);border:1px solid var(--b1);border-radius:12px;padding:15px 16px;cursor:pointer;transition:all .15s;text-align:left;margin-bottom:8px;color:var(--tx)}
-.dept-card:hover{background:var(--s2);border-color:var(--b2)}
-.dept-badge{width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;flex-shrink:0}
+.btn-pr:disabled{background:var(--dm);color:#fff;cursor:not-allowed}
+.btn-ghost{background:transparent;border:1.5px solid var(--bd);border-radius:10px;padding:13px 20px;color:var(--mt);cursor:pointer;transition:all .15s;width:100%}
+.btn-ghost:hover{background:var(--bg);border-color:var(--dm);color:var(--tx)}
+.btn-sm{background:var(--white);border:1.5px solid var(--bd);border-radius:8px;padding:7px 13px;color:var(--mt);cursor:pointer;transition:all .15s;font-size:12px;white-space:nowrap}
+.btn-sm:hover{color:var(--tx);border-color:var(--dm)}
+
+/* ── DEPT PICKER ── */
+#s-dept{background:var(--bg);align-items:flex-start;justify-content:center;overflow-y:auto}
+.d-wrap{width:100%;max-width:480px;padding:40px 20px;margin:0 auto}
+.d-hdr{text-align:center;margin-bottom:32px}
+.d-logo{width:56px;height:56px;border-radius:16px;background:var(--pr);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:24px;box-shadow:0 8px 24px rgba(79,70,229,.3)}
+.d-hdr h2{font-size:20px;font-weight:800;color:var(--tx)}
+.d-hdr p{font-size:13px;color:var(--mt);margin-top:5px}
+.dept-card{width:100%;display:flex;align-items:center;gap:14px;background:var(--white);border:1.5px solid var(--bd);border-radius:14px;padding:16px 18px;cursor:pointer;transition:all .15s;text-align:left;margin-bottom:10px;color:var(--tx);box-shadow:0 1px 4px rgba(0,0,0,.04)}
+.dept-card:hover{border-color:var(--pr);box-shadow:0 4px 12px rgba(79,70,229,.12)}
+.dept-badge{width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;flex-shrink:0}
 .dept-info{flex:1;min-width:0}
-.dept-name{font-size:14px;font-weight:600;color:var(--tx)}
-.dept-wait{font-size:12px;color:var(--mt);margin-top:2px}
-.dept-arrow{color:var(--dm);font-size:18px;flex-shrink:0}
-/* ── MAIN PANEL ──────────────────────────────────────── */
-#s-main{background:var(--bg)}
-/* Topbar */
-.topbar{height:48px;min-height:48px;background:var(--s1);border-bottom:1px solid var(--b1);display:flex;align-items:center;padding:0 14px;gap:10px;flex-shrink:0}
-.tb-logo{width:28px;height:28px;border-radius:7px;background:var(--pr);display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0}
-.tb-org{font-size:13px;font-weight:700;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px}
-.dept-pill{border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;white-space:nowrap}
-.tb-gap{flex:1}
-.win-sel{background:var(--s2);border:1px solid var(--b1);border-radius:7px;padding:4px 8px;color:var(--tx);font-size:11px;outline:none;cursor:pointer;max-width:110px}
-.win-sel option{background:var(--s1)}
-.conn-dot{width:7px;height:7px;border-radius:50%;background:var(--dm);flex-shrink:0;transition:background .3s}
+.dept-name{font-size:15px;font-weight:700;color:var(--tx)}
+.dept-wait{font-size:12px;color:var(--mt);margin-top:3px}
+.dept-arrow{color:var(--dm);font-size:20px;flex-shrink:0}
+
+/* ── MAIN PANEL ── */
+#s-main{flex-direction:row}
+
+/* Sidebar */
+.sidebar{width:220px;min-width:220px;background:var(--sb);display:flex;flex-direction:column;height:100vh;border-right:1px solid var(--sb-bd)}
+.sb-brand{padding:20px 18px 16px}
+.sb-logo-row{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.sb-logo{width:36px;height:36px;border-radius:10px;background:var(--pr);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
+.sb-org{font-size:13px;font-weight:800;color:var(--sb-tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sb-sub{font-size:11px;color:var(--sb-mt);letter-spacing:.3px}
+.sb-divider{height:1px;background:var(--sb-bd);margin:0 18px}
+.sb-section{padding:14px 18px}
+.sb-sec-title{font-size:9px;font-weight:700;color:var(--sb-dm);text-transform:uppercase;letter-spacing:.9px;margin-bottom:10px}
+.sb-stat{display:flex;align-items:center;justify-content:space-between;padding:5px 0}
+.sb-stat-label{font-size:12px;color:var(--sb-mt)}
+.sb-stat-val{font-size:20px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums}
+.n-am{color:var(--am)}.n-bl{color:var(--bl)}.n-em{color:var(--em)}.n-mt{color:var(--sb-dm)}
+.win-sel{width:100%;background:var(--sb2);border:1px solid var(--sb-bd);border-radius:8px;padding:9px 10px;color:var(--sb-tx);font-size:12px;outline:none;cursor:pointer}
+.win-sel option{background:var(--sb)}
+.dept-pill{border-radius:20px;padding:4px 12px;font-size:11px;font-weight:700;display:inline-flex;white-space:nowrap}
+.sb-dept-wrap{padding:2px 18px 14px}
+.sb-spacer{flex:1}
+.sb-footer{padding:14px 18px;border-top:1px solid var(--sb-bd)}
+.sb-conn{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.conn-dot{width:8px;height:8px;border-radius:50%;background:var(--sb-dm);flex-shrink:0;transition:background .3s}
 .conn-dot.on{background:var(--em)}
-/* Stats strip */
-.stats-strip{display:grid;grid-template-columns:repeat(4,1fr);background:var(--s2);border-bottom:1px solid var(--b1);flex-shrink:0}
-.stat-box{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 4px;border-right:1px solid var(--b1)}
-.stat-box:last-child{border-right:none}
-.stat-n{font-size:22px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums}
-.stat-l{font-size:9px;text-transform:uppercase;letter-spacing:.4px;color:var(--mt);margin-top:2px}
-.n-am{color:var(--am)}.n-bl{color:var(--bl)}.n-em{color:var(--em)}.n-mt{color:var(--dm)}
-/* Scrollable body */
-.main-body{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
+.sb-conn-label{font-size:11px;color:var(--sb-mt)}
+.sb-signout{width:100%;background:rgba(255,255,255,.07);border:1px solid var(--sb-bd);border-radius:8px;padding:10px;color:var(--sb-mt);font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;text-align:center}
+.sb-signout:hover{background:rgba(239,68,68,.18);border-color:rgba(239,68,68,.35);color:#fca5a5}
+
+/* Content area */
+.content{flex:1;display:flex;flex-direction:column;height:100vh;overflow:hidden;background:var(--bg)}
+.topbar{height:52px;min-height:52px;background:var(--white);border-bottom:1.5px solid var(--bd);display:flex;align-items:center;padding:0 20px;gap:10px;flex-shrink:0;box-shadow:0 1px 4px rgba(0,0,0,.04)}
+.tb-bread{font-size:13px;font-weight:600;color:var(--mt)}
+.tb-sep{font-size:14px;color:var(--dm);margin:0 2px}
+.tb-dept-wrap{display:flex;align-items:center}
+.tb-gap{flex:1}
+.tb-user{font-size:12px;color:var(--mt);display:flex;align-items:center;gap:6px}
+.tb-user-name{font-weight:700;color:var(--tx)}
+
+/* Body */
+.main-body{flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:14px}
 .main-body::-webkit-scrollbar{width:4px}
-.main-body::-webkit-scrollbar-thumb{background:var(--b1);border-radius:2px}
+.main-body::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px}
+
 /* Hero card */
-.hero{background:var(--s1);border:1px solid var(--b1);border-radius:14px;padding:20px}
-.hero-lbl{font-size:10px;font-weight:700;color:var(--mt);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px}
+.hero{background:var(--white);border:1.5px solid var(--bd);border-left:4px solid var(--pr);border-radius:16px;padding:22px;box-shadow:0 2px 8px rgba(0,0,0,.05)}
+.hero-lbl{font-size:10px;font-weight:700;color:var(--mt);text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px}
 .hero-num{font-size:72px;font-weight:900;line-height:1;letter-spacing:2px;font-variant-numeric:tabular-nums;color:var(--tx);transition:color .2s}
-.hero-num.empty{color:var(--b2);font-size:52px}
-.hero-meta{font-size:12px;color:var(--mt);margin-top:6px;min-height:18px}
-.hero-meta .hm-cat{color:var(--pl)}
+.hero-num.empty{color:var(--dm);font-size:48px}
+.hero-meta{font-size:13px;color:var(--mt);margin-top:8px;min-height:20px}
+.hero-meta .hm-cat{color:var(--pr);font-weight:600}
 .hero-meta .hm-age{color:var(--dm)}
-.hero-actions{display:flex;gap:8px;margin-top:16px}
-.btn-call{flex:2;background:var(--pr);color:#fff;border:none;border-radius:10px;padding:14px;font-size:15px;font-weight:700;cursor:pointer;transition:all .15s;box-shadow:0 4px 14px rgba(79,70,229,.3)}
+.hero-actions{display:flex;gap:10px;margin-top:18px}
+.btn-call{flex:2;background:var(--pr);color:#fff;border:none;border-radius:10px;padding:14px;font-size:15px;font-weight:700;cursor:pointer;transition:all .15s;box-shadow:0 4px 14px rgba(79,70,229,.25)}
 .btn-call:hover:not(:disabled){background:var(--ph);transform:translateY(-1px)}
-.btn-call:disabled{background:var(--b1);color:var(--dm);cursor:not-allowed;box-shadow:none;transform:none}
-.btn-recall{flex:1;background:var(--s2);border:1px solid var(--b1);border-radius:10px;padding:14px;color:var(--mt);font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
-.btn-recall:hover:not(:disabled){background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.3);color:var(--am)}
-.btn-recall:disabled{opacity:.35;cursor:not-allowed}
+.btn-call:disabled{background:var(--dm);color:#fff;cursor:not-allowed;box-shadow:none;transform:none}
+.btn-recall{flex:1;background:var(--white);border:1.5px solid var(--bd);border-radius:10px;padding:14px;color:var(--mt);font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
+.btn-recall:hover:not(:disabled){background:#fffbeb;border-color:#fcd34d;color:var(--am)}
+.btn-recall:disabled{opacity:.4;cursor:not-allowed}
+
 /* Sections */
-.section{background:var(--s1);border:1px solid var(--b1);border-radius:14px;overflow:hidden}
-.sec-hd{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--b1)}
-.sec-hd-title{font-size:11px;font-weight:700;color:var(--mt);text-transform:uppercase;letter-spacing:.5px}
-.sec-badge{font-size:12px;font-weight:700;color:var(--pl)}
+.section{background:var(--white);border:1.5px solid var(--bd);border-radius:16px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.04)}
+.sec-hd{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--bd)}
+.sec-hd-title{font-size:12px;font-weight:700;color:var(--tx);text-transform:uppercase;letter-spacing:.4px}
+.sec-badge{font-size:12px;font-weight:800;background:var(--bg);border:1px solid var(--bd);border-radius:20px;padding:2px 10px;color:var(--pr)}
 .sec-badge.am{color:var(--am)}
-.empty-msg{padding:20px;text-align:center;font-size:13px;color:var(--dm)}
-/* Ticket rows — called */
-.trow{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--b1);transition:background .1s}
+.empty-msg{padding:24px;text-align:center;font-size:13px;color:var(--dm)}
+
+/* Called rows */
+.trow{display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid var(--bd);transition:background .1s}
 .trow:last-child{border-bottom:none}
-.trow:hover{background:var(--s2)}
-.trow-num{font-size:18px;font-weight:800;min-width:54px;font-variant-numeric:tabular-nums;flex-shrink:0}
+.trow:hover{background:var(--bg)}
+.trow-num{font-size:18px;font-weight:800;min-width:56px;font-variant-numeric:tabular-nums;flex-shrink:0}
 .trow-info{flex:1;min-width:0}
-.trow-cat{font-size:12px;color:var(--mt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.trow-meta{font-size:11px;color:var(--dm);margin-top:1px}
-.trow-acts{display:flex;gap:4px;flex-shrink:0}
-.act{border:none;border-radius:7px;padding:6px 9px;font-size:11px;font-weight:600;cursor:pointer;transition:all .1s}
-.act-s{background:rgba(16,185,129,.1);color:var(--em);border:1px solid rgba(16,185,129,.2)}.act-s:hover{background:rgba(16,185,129,.2)}
-.act-r{background:rgba(245,158,11,.08);color:var(--am);border:1px solid rgba(245,158,11,.2)}.act-r:hover{background:rgba(245,158,11,.15)}
-.act-n{background:rgba(239,68,68,.08);color:var(--rd);border:1px solid rgba(239,68,68,.2)}.act-n:hover{background:rgba(239,68,68,.15)}
-.act-k{background:var(--s2);color:var(--dm);border:1px solid var(--b1)}.act-k:hover{background:var(--b1)}
-/* Ticket rows — waiting */
-.wrow{display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--b1);transition:background .1s}
+.trow-cat{font-size:12px;color:var(--mt);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trow-meta{font-size:11px;color:var(--dm);margin-top:2px}
+.trow-acts{display:flex;gap:5px;flex-shrink:0}
+.act{border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;transition:all .1s}
+.act-s{background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0}.act-s:hover{background:#dcfce7}
+.act-r{background:#fffbeb;color:#d97706;border:1px solid #fde68a}.act-r:hover{background:#fef3c7}
+.act-n{background:#fef2f2;color:#dc2626;border:1px solid #fecaca}.act-n:hover{background:#fee2e2}
+.act-k{background:var(--bg);color:var(--dm);border:1px solid var(--bd)}.act-k:hover{background:#e2e8f0}
+
+/* Waiting rows */
+.wrow{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--bd);transition:background .1s}
 .wrow:last-child{border-bottom:none}
-.wrow.next{background:rgba(79,70,229,.06);border-left:2px solid var(--pr)}
-.wrow-pos{font-size:11px;font-weight:700;color:var(--dm);min-width:18px;text-align:center}
-.wrow.next .wrow-pos{color:var(--pl)}
-.wrow-num{font-size:15px;font-weight:800;min-width:52px;font-variant-numeric:tabular-nums}
-.wrow.next .wrow-num{color:var(--pl)}
+.wrow.next{background:#f5f3ff;border-left:3px solid var(--pr)}
+.wrow:hover{background:var(--bg)}
+.wrow-pos{font-size:11px;font-weight:700;color:var(--dm);min-width:20px;text-align:center}
+.wrow.next .wrow-pos{color:var(--pr)}
+.wrow-num{font-size:15px;font-weight:800;min-width:54px;font-variant-numeric:tabular-nums;color:var(--tx)}
+.wrow.next .wrow-num{color:var(--pr)}
 .wrow-info{flex:1;min-width:0}
-.wrow-cat{font-size:12px;color:var(--mt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.wrow-age{font-size:11px;color:var(--dm);margin-top:1px}
-.next-badge{font-size:9px;font-weight:700;color:var(--pr);background:rgba(79,70,229,.12);border:1px solid rgba(79,70,229,.2);border-radius:4px;padding:2px 5px;flex-shrink:0}
+.wrow-cat{font-size:12px;color:var(--mt);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wrow-age{font-size:11px;color:var(--dm);margin-top:2px}
+.next-badge{font-size:9px;font-weight:700;color:var(--pr);background:#ede9fe;border:1px solid #c4b5fd;border-radius:4px;padding:2px 6px;flex-shrink:0}
+
 /* Name call */
-.name-row{display:flex;gap:8px;padding:12px 14px}
-.name-inp{flex:1;background:var(--bg);border:1px solid var(--b1);border-radius:8px;padding:10px 12px;color:var(--tx);outline:none;transition:border-color .15s;min-width:0}
+.name-row{display:flex;gap:10px;padding:14px 16px}
+.name-inp{flex:1;background:var(--bg);border:1.5px solid var(--bd);border-radius:10px;padding:11px 14px;color:var(--tx);outline:none;transition:border-color .15s;min-width:0}
 .name-inp:focus{border-color:var(--pr)}
 .name-inp::placeholder{color:var(--dm)}
-.btn-announce{background:var(--s2);border:1px solid var(--b1);border-radius:8px;padding:10px 14px;color:var(--tx);font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap;flex-shrink:0}
-.btn-announce:hover{background:var(--b1)}
-.btn-announce:disabled{opacity:.35;cursor:not-allowed}
-/* Flash animation */
-@keyframes flash{0%{background:rgba(79,70,229,.15)}100%{background:transparent}}
+.btn-announce{background:var(--pr);border:none;border-radius:10px;padding:11px 18px;color:#fff;font-weight:700;cursor:pointer;transition:all .15s;white-space:nowrap;flex-shrink:0}
+.btn-announce:hover{background:var(--ph)}
+.btn-announce:disabled{opacity:.4;cursor:not-allowed}
+
+/* Flash */
+@keyframes flash{0%{box-shadow:0 0 0 5px rgba(79,70,229,.3)}100%{box-shadow:0 2px 8px rgba(0,0,0,.05)}}
 .flash{animation:flash .8s ease-out}
 </style>
 </head>
 <body>
 
-<!-- ══ SCREEN: LOGIN ══════════════════════════════════════════════════════ -->
+<!-- ══ LOGIN ══════════════════════════════════════════════════════════════ -->
 <div id="s-login" class="scr active">
   <div class="l-wrap">
     <div class="l-brand">
@@ -1622,7 +1982,7 @@ input,select,button{font-family:inherit;font-size:inherit}
   </div>
 </div>
 
-<!-- ══ SCREEN: DEPT PICKER ═══════════════════════════════════════════════ -->
+<!-- ══ DEPT PICKER ════════════════════════════════════════════════════════ -->
 <div id="s-dept" class="scr">
   <div class="d-wrap">
     <div class="d-hdr">
@@ -1631,77 +1991,120 @@ input,select,button{font-family:inherit;font-size:inherit}
       <p>Chagua idara yako kuendelea</p>
     </div>
     <div id="d-grid"></div>
-    <button id="b-all" class="btn-ghost" style="display:none;margin-top:8px" onclick="selectDept(null)">
+    <button id="b-all" class="btn-ghost" style="display:none;margin-top:10px" onclick="selectDept(null)">
       &#9745; Angalia idara zote (supervisor mode)
     </button>
   </div>
 </div>
 
-<!-- ══ SCREEN: MAIN ══════════════════════════════════════════════════════ -->
+<!-- ══ MAIN PANEL ═════════════════════════════════════════════════════════ -->
 <div id="s-main" class="scr">
 
-  <!-- Top bar -->
-  <div class="topbar">
-    <div class="tb-logo">&#9654;</div>
-    <span class="tb-org">${orgName}</span>
-    <div id="tb-dept" class="dept-pill" style="display:none"></div>
-    <div class="tb-gap"></div>
-    <select id="win-sel" class="win-sel"></select>
-    <div id="conn" class="conn-dot" title="Live connection"></div>
-    <button class="btn-sm" onclick="signOut()">&#10005; Sign out</button>
-  </div>
-
-  <!-- Stats strip -->
-  <div class="stats-strip">
-    <div class="stat-box"><div id="sv-w" class="stat-n n-am">0</div><div class="stat-l">Waiting</div></div>
-    <div class="stat-box"><div id="sv-c" class="stat-n n-bl">0</div><div class="stat-l">Called</div></div>
-    <div class="stat-box"><div id="sv-s" class="stat-n n-em">0</div><div class="stat-l">Served</div></div>
-    <div class="stat-box"><div id="sv-k" class="stat-n n-mt">0</div><div class="stat-l">Skipped</div></div>
-  </div>
-
-  <!-- Scrollable body -->
-  <div class="main-body">
-
-    <!-- Hero: Next ticket + Call Next -->
-    <div class="hero" id="hero-card">
-      <div class="hero-lbl">Next in Queue</div>
-      <div id="h-num" class="hero-num empty">&#8212;</div>
-      <div id="h-meta" class="hero-meta">Queue is empty</div>
-      <div class="hero-actions">
-        <button id="b-next" class="btn-call" onclick="callNext()" disabled>&#128276;&nbsp; Call Next</button>
-        <button id="b-recall" class="btn-recall" onclick="recallLast()" disabled>&#8635;&nbsp; Recall</button>
+  <!-- ── Sidebar ── -->
+  <aside class="sidebar">
+    <div class="sb-brand">
+      <div class="sb-logo-row">
+        <div class="sb-logo">&#9654;</div>
+        <span class="sb-org">${orgName}</span>
       </div>
+      <div class="sb-sub">Queue Operator Panel</div>
     </div>
 
-    <!-- Active Calls -->
-    <div class="section" id="sec-called" style="display:none">
-      <div class="sec-hd">
-        <span class="sec-hd-title">Active Calls</span>
-        <span id="called-ct" class="sec-badge">0</span>
-      </div>
-      <div id="called-list"></div>
+    <div class="sb-divider"></div>
+
+    <!-- Department -->
+    <div class="sb-dept-wrap" id="sb-dept-wrap" style="display:none">
+      <div class="sb-sec-title" style="padding:14px 0 8px">DEPARTMENT</div>
+      <div id="tb-dept" class="dept-pill"></div>
     </div>
 
-    <!-- Waiting Queue -->
-    <div class="section">
-      <div class="sec-hd">
-        <span class="sec-hd-title">Waiting Queue</span>
-        <span id="wait-ct" class="sec-badge am">0</span>
-      </div>
-      <div id="wait-list"></div>
+    <div class="sb-divider"></div>
+
+    <!-- Stats -->
+    <div class="sb-section">
+      <div class="sb-sec-title">TODAY&rsquo;S STATS</div>
+      <div class="sb-stat"><span class="sb-stat-label">Waiting</span><span id="sv-w" class="sb-stat-val n-am">0</span></div>
+      <div class="sb-stat"><span class="sb-stat-label">Called</span><span id="sv-c" class="sb-stat-val n-bl">0</span></div>
+      <div class="sb-stat"><span class="sb-stat-label">Served</span><span id="sv-s" class="sb-stat-val n-em">0</span></div>
+      <div class="sb-stat"><span class="sb-stat-label">Skipped</span><span id="sv-k" class="sb-stat-val n-mt">0</span></div>
     </div>
 
-    <!-- Name Call -->
-    <div class="section">
-      <div class="sec-hd">
-        <span class="sec-hd-title">&#127897;&nbsp; Call by Name</span>
-      </div>
-      <div class="name-row">
-        <input id="i-name" class="name-inp" type="text" placeholder="Type patient or visitor name&#8230;">
-        <button id="b-announce" class="btn-announce" onclick="callName()">Announce</button>
-      </div>
+    <div class="sb-divider"></div>
+
+    <!-- Window selector -->
+    <div class="sb-section">
+      <div class="sb-sec-title">YOUR WINDOW</div>
+      <select id="win-sel" class="win-sel"></select>
     </div>
 
+    <div class="sb-spacer"></div>
+
+    <!-- Footer -->
+    <div class="sb-footer">
+      <div class="sb-conn">
+        <div id="conn" class="conn-dot"></div>
+        <span class="sb-conn-label" id="conn-label">Connecting&hellip;</span>
+      </div>
+      <button class="sb-signout" onclick="signOut()">&#10005;&nbsp; Sign Out</button>
+    </div>
+  </aside>
+
+  <!-- ── Content ── -->
+  <div class="content">
+
+    <!-- Top bar -->
+    <div class="topbar">
+      <span class="tb-bread">Queue Panel</span>
+      <span class="tb-sep">›</span>
+      <span class="tb-bread" id="tb-bread-dept" style="color:var(--tx);font-weight:700">All Departments</span>
+      <div class="tb-gap"></div>
+      <div class="tb-user">&#128100;&nbsp;<span class="tb-user-name" id="tb-username"></span></div>
+    </div>
+
+    <!-- Scrollable body -->
+    <div class="main-body">
+
+      <!-- Hero: Next ticket -->
+      <div class="hero" id="hero-card">
+        <div class="hero-lbl">Next in Queue</div>
+        <div id="h-num" class="hero-num empty">&#8212;</div>
+        <div id="h-meta" class="hero-meta">Queue is empty</div>
+        <div class="hero-actions">
+          <button id="b-next" class="btn-call" onclick="callNext()" disabled>&#128276;&nbsp; Call Next</button>
+          <button id="b-recall" class="btn-recall" onclick="recallLast()" disabled>&#8635;&nbsp; Recall</button>
+        </div>
+      </div>
+
+      <!-- Active Calls -->
+      <div class="section" id="sec-called" style="display:none">
+        <div class="sec-hd">
+          <span class="sec-hd-title">Active Calls</span>
+          <span id="called-ct" class="sec-badge">0</span>
+        </div>
+        <div id="called-list"></div>
+      </div>
+
+      <!-- Waiting Queue -->
+      <div class="section">
+        <div class="sec-hd">
+          <span class="sec-hd-title">Waiting Queue</span>
+          <span id="wait-ct" class="sec-badge am">0</span>
+        </div>
+        <div id="wait-list"></div>
+      </div>
+
+      <!-- Call by Name -->
+      <div class="section">
+        <div class="sec-hd">
+          <span class="sec-hd-title">&#127897;&nbsp; Call by Name</span>
+        </div>
+        <div class="name-row">
+          <input id="i-name" class="name-inp" type="text" placeholder="Type patient or visitor name&hellip;">
+          <button id="b-announce" class="btn-announce" onclick="callName()">Announce</button>
+        </div>
+      </div>
+
+    </div>
   </div>
 </div>
 
@@ -1775,14 +2178,23 @@ function selectDept(cat){
   populateWinSel()
   connectSSE()
   show('s-main')
-  // dept pill
+  // username in topbar
+  var unameEl=document.getElementById('tb-username')
+  if(unameEl&&user) unameEl.textContent=user.displayName||user.username
+  // dept pill in sidebar
   var pill=document.getElementById('tb-dept')
+  var wrap=document.getElementById('sb-dept-wrap')
+  var bread=document.getElementById('tb-bread-dept')
   if(cat){
     pill.textContent=cat.label
-    pill.style.cssText='display:inline-flex;background:'+cat.color+'18;border:1px solid '+cat.color+'35;color:'+cat.color
+    pill.style.cssText='display:inline-flex;background:'+cat.color+'25;border:1px solid '+cat.color+'50;color:'+cat.color
+    if(wrap) wrap.style.display='block'
+    if(bread) bread.textContent=cat.label
   }else{
-    pill.textContent='All Depts'
-    pill.style.cssText='display:inline-flex;background:var(--s2);border:1px solid var(--b1);color:var(--mt)'
+    pill.textContent='All Departments'
+    pill.style.cssText='display:inline-flex;background:rgba(255,255,255,.08);border:1px solid var(--sb-bd);color:var(--sb-mt)'
+    if(wrap) wrap.style.display='block'
+    if(bread) bread.textContent='All Departments'
   }
   renderAll()
 }
@@ -1808,8 +2220,8 @@ function connectSSE(){
     var d=JSON.parse(e.data)
     renderStats(d)
   })
-  es.onopen=function(){document.getElementById('conn').className='conn-dot on'}
-  es.onerror=function(){document.getElementById('conn').className='conn-dot'}
+  es.onopen=function(){document.getElementById('conn').className='conn-dot on';var l=document.getElementById('conn-label');if(l)l.textContent='Connected'}
+  es.onerror=function(){document.getElementById('conn').className='conn-dot';var l=document.getElementById('conn-label');if(l)l.textContent='Reconnecting\u2026'}
 }
 
 // ── render ────────────────────────────────────────────────────────────────────

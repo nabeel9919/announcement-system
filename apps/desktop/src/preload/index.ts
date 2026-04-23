@@ -82,7 +82,9 @@ const api = {
     /** Called by display page on mount to register itself */
     register: () => ipcRenderer.invoke('display:register'),
     onUpdate: (cb: (payload: unknown) => void) => {
-      ipcRenderer.on('display:update', (_e, payload) => cb(payload))
+      const handler = (_e: Electron.IpcRendererEvent, payload: unknown) => cb(payload)
+      ipcRenderer.on('display:update', handler)
+      return () => ipcRenderer.removeListener('display:update', handler)
     },
   },
 
@@ -98,19 +100,29 @@ const api = {
     install: () => ipcRenderer.invoke('updater:install'),
     checkNow: () => ipcRenderer.invoke('updater:checkNow'),
     onAvailable: (cb: (info: unknown) => void) => {
-      ipcRenderer.on('update-available', (_e, info) => cb(info))
+      const h = (_e: Electron.IpcRendererEvent, info: unknown) => cb(info)
+      ipcRenderer.on('update-available', h)
+      return () => ipcRenderer.removeListener('update-available', h)
     },
     onNotAvailable: (cb: () => void) => {
-      ipcRenderer.on('update-not-available', () => cb())
+      const h = () => cb()
+      ipcRenderer.on('update-not-available', h)
+      return () => ipcRenderer.removeListener('update-not-available', h)
     },
     onProgress: (cb: (progress: unknown) => void) => {
-      ipcRenderer.on('update-download-progress', (_e, p) => cb(p))
+      const h = (_e: Electron.IpcRendererEvent, p: unknown) => cb(p)
+      ipcRenderer.on('update-download-progress', h)
+      return () => ipcRenderer.removeListener('update-download-progress', h)
     },
     onDownloaded: (cb: () => void) => {
-      ipcRenderer.on('update-downloaded', () => cb())
+      const h = () => cb()
+      ipcRenderer.on('update-downloaded', h)
+      return () => ipcRenderer.removeListener('update-downloaded', h)
     },
     onError: (cb: (message: string) => void) => {
-      ipcRenderer.on('update-error', (_e, message) => cb(message))
+      const h = (_e: Electron.IpcRendererEvent, message: string) => cb(message)
+      ipcRenderer.on('update-error', h)
+      return () => ipcRenderer.removeListener('update-error', h)
     },
   },
 
@@ -141,7 +153,9 @@ const api = {
     getKioskToken: (): Promise<string> => ipcRenderer.invoke('lan:getKioskToken'),
     /** Called when a remote operator triggers an announcement via LAN */
     onAnnounce: (cb: (data: { text: string; displayNumber: string }) => void) => {
-      ipcRenderer.on('lan:announce', (_e, data) => cb(data))
+      const h = (_e: Electron.IpcRendererEvent, data: { text: string; displayNumber: string }) => cb(data)
+      ipcRenderer.on('lan:announce', h)
+      return () => ipcRenderer.removeListener('lan:announce', h)
     },
   },
 
@@ -180,17 +194,23 @@ const api = {
   // ─── Global keyboard shortcuts ─────────────────────────────────────────────
   /** Fired when the user presses a global shortcut (F1/F2/F9) even when window is unfocused */
   onShortcut: (cb: (action: 'call-next' | 'recall-last' | 'toggle-mute') => void) => {
-    ipcRenderer.on('shortcut', (_e, action) => cb(action))
+    const h = (_e: Electron.IpcRendererEvent, action: 'call-next' | 'recall-last' | 'toggle-mute') => cb(action)
+    ipcRenderer.on('shortcut', h)
+    return () => ipcRenderer.removeListener('shortcut', h)
   },
 
   // ─── Navigation ────────────────────────────────────────────────────────
   onNavigate: (cb: (route: string) => void) => {
-    ipcRenderer.on('navigate', (_e, route) => cb(route))
+    const h = (_e: Electron.IpcRendererEvent, route: string) => cb(route)
+    ipcRenderer.on('navigate', h)
+    return () => ipcRenderer.removeListener('navigate', h)
   },
 
   // ─── Screen change notification ────────────────────────────────────────
   onScreensChanged: (cb: () => void) => {
-    ipcRenderer.on('screens:changed', () => cb())
+    const h = () => cb()
+    ipcRenderer.on('screens:changed', h)
+    return () => ipcRenderer.removeListener('screens:changed', h)
   },
 
   // ─── Feedback ──────────────────────────────────────────────────────────

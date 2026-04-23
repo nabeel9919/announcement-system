@@ -504,8 +504,8 @@ export default function KioskPage() {
               ))}
               {categories.length === 0 && <p className="col-span-3 text-center text-zinc-600 text-xl">No services configured</p>}
             </div>
-            <button onClick={() => setMode('home')} className="flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-300 transition-colors mx-auto mt-8">
-              <ChevronLeft className="w-4 h-4" /> {T.back}
+            <button onClick={() => setMode('home')} className="flex items-center gap-2 rounded-2xl border border-zinc-700 bg-zinc-800/60 hover:bg-zinc-700/60 active:scale-95 px-8 py-4 text-base font-semibold text-zinc-300 transition-all mx-auto mt-8">
+              <ChevronLeft className="w-5 h-5" /> {T.back}
             </button>
           </div>
         )}
@@ -551,8 +551,8 @@ export default function KioskPage() {
               </div>
             )}
             <button onClick={() => { questionIndex === 0 ? setTicketStep('select') : (setQuestionIndex(questionIndex - 1), setTextInput('')) }}
-              className="flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-300 transition-colors mx-auto mt-2">
-              <ChevronLeft className="w-4 h-4" /> {T.back}
+              className="flex items-center gap-2 rounded-2xl border border-zinc-700 bg-zinc-800/60 hover:bg-zinc-700/60 active:scale-95 px-8 py-4 text-base font-semibold text-zinc-300 transition-all mx-auto mt-4">
+              <ChevronLeft className="w-5 h-5" /> {T.back}
             </button>
           </div>
         )}
@@ -626,8 +626,8 @@ export default function KioskPage() {
           <div className="flex flex-col items-center gap-6 text-center">
             <MessageSquare className="w-16 h-16 text-zinc-700" />
             <p className="text-zinc-400 text-xl">{sw ? 'Maswali ya maoni hayajaundwa.' : 'No feedback questions configured yet.'}</p>
-            <button onClick={resetAll} className="flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-300 transition-colors">
-              <ChevronLeft className="w-4 h-4" /> {T.back}
+            <button onClick={resetAll} className="flex items-center gap-2 rounded-2xl border border-zinc-700 bg-zinc-800/60 hover:bg-zinc-700/60 active:scale-95 px-8 py-4 text-base font-semibold text-zinc-300 transition-all">
+              <ChevronLeft className="w-5 h-5" /> {T.back}
             </button>
           </div>
         )}
@@ -689,8 +689,8 @@ export default function KioskPage() {
 
             <div className="flex items-center justify-between">
               <button onClick={() => { feedbackIndex === 0 ? resetAll() : (setFeedbackIndex(feedbackIndex - 1), setFeedbackText('')) }}
-                className="flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-300 transition-colors">
-                <ChevronLeft className="w-4 h-4" /> {T.back}
+                className="flex items-center gap-2 rounded-2xl border border-zinc-700 bg-zinc-800/60 hover:bg-zinc-700/60 active:scale-95 px-6 py-3 text-base font-semibold text-zinc-300 transition-all">
+                <ChevronLeft className="w-5 h-5" /> {T.back}
               </button>
               {!currentFeedbackQ.isRequired && (
                 <button onClick={handleFeedbackSkip} className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors">
@@ -804,15 +804,17 @@ export default function KioskPage() {
                         className="w-full h-full object-contain" draggable={false} />
                       {/* SVG overlay for routing line */}
                       {currentPin && selectedDestPin && (
-                        <svg className="absolute inset-0 w-full h-full pointer-events-none">
-                          <line
-                            x1={`${currentPin.x}%`} y1={`${currentPin.y}%`}
-                            x2={`${selectedDestPin.x}%`} y2={`${selectedDestPin.y}%`}
-                            stroke="#10B981" strokeWidth="3" strokeDasharray="8 4"
-                            strokeLinecap="round"
+                        <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
+                          <polyline
+                            points={
+                              selectedDestPin.path && selectedDestPin.path.length > 1
+                                ? selectedDestPin.path.map(p => `${p.x},${p.y}`).join(' ')
+                                : `${currentPin.x},${currentPin.y} ${selectedDestPin.x},${selectedDestPin.y}`
+                            }
+                            stroke="#10B981" strokeWidth="1.5" strokeDasharray="3 1.5"
+                            fill="none" strokeLinecap="round" strokeLinejoin="round"
                           />
-                          {/* Arrowhead */}
-                          <circle cx={`${selectedDestPin.x}%`} cy={`${selectedDestPin.y}%`} r="6" fill="#10B981" opacity="0.4" />
+                          <circle cx={selectedDestPin.x} cy={selectedDestPin.y} r="2.5" fill="#10B981" opacity="0.7" />
                         </svg>
                       )}
                       {/* Pins */}
@@ -852,8 +854,8 @@ export default function KioskPage() {
               </div>
             )}
 
-            <button onClick={resetAll} className="flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-300 transition-colors mx-auto mt-4 flex-shrink-0">
-              <ChevronLeft className="w-4 h-4" /> {T.back}
+            <button onClick={resetAll} className="flex items-center gap-2 rounded-2xl border border-zinc-700 bg-zinc-800/60 hover:bg-zinc-700/60 active:scale-95 px-8 py-4 text-base font-semibold text-zinc-300 transition-all mx-auto mt-4 flex-shrink-0">
+              <ChevronLeft className="w-5 h-5" /> {T.back}
             </button>
           </div>
         )}
